@@ -59,7 +59,24 @@ def _cmd_mine(args: argparse.Namespace) -> int:
         doc_literals_only=args.doc_literals_only,
         require_withdrawn_claim=args.require_withdrawn,
         drop_docs_build_paths=args.drop_docs_build_paths,
+        easy_negatives_per_repo=args.easy_negatives,
     )
+
+    # Checked before the clones, so a refusal costs nothing rather than arriving at
+    # the end of a seven-minute walk. `mine` writes derived data and overwriting it is
+    # normally harmless -- but `--out` defaults to the one label set in this repo that
+    # predates manifests and therefore cannot be regenerated, and the usage example in
+    # the README pointed straight at it. It was silently clobbered exactly that way.
+    # A guard is cheaper than remembering.
+    if args.out.exists() and not args.force:
+        print(
+            f"refusing to overwrite existing {args.out}\n"
+            "  mine output is derived data, but this file may not be regenerable.\n"
+            "  choose a new --out (e.g. data/labels-v10.jsonl), or pass --force.",
+            file=sys.stderr,
+        )
+        return 2
+
     args.out.parent.mkdir(parents=True, exist_ok=True)
 
     # `owner/name=sha` pins from a previous manifest. Replaying a run without these
@@ -263,6 +280,11 @@ def main(argv: list[str] | None = None) -> int:
     mine.add_argument("--clones", type=Path, default=DEFAULT_CLONES)
     mine.add_argument("--out", type=Path, default=DEFAULT_LABELS)
     mine.add_argument("--limit", type=int, default=None, help="max commits per repo")
+    mine.add_argument(
+        "--force",
+        action="store_true",
+        help="overwrite --out if it already exists (refused by default)",
+    )
     mine.add_argument("--since", default=None, help='e.g. "2022-01-01"')
     mine.add_argument(
         "--pin",
@@ -290,6 +312,19 @@ def main(argv: list[str] | None = None) -> int:
         default=True,
         help="shape B: judge the doc side on all prose rather than only on "
         "marked-up code spans and version literals",
+    )
+    mine.add_argument(
+        "--easy-negatives",
+        type=int,
+        default=0,
+        metavar="N",
+        help="also emit N negatives per repo from doc/code pairs that never "
+        "co-changed. These are the only negatives that permit a false-positive "
+        "rate: a matched negative's doc really is about its code, so a detector "
+        "that fires on everything still scores well on them. Split evenly between "
+        "uniformly random pairs and pairs whose paths look related, reported "
+        "separately by label_basis -- a random pair is trivially unrelated, so a "
+        "specificity number built only from those prices the problem too cheaply",
     )
     mine.add_argument(
         "--require-withdrawn-claim",

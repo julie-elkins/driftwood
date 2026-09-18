@@ -32,10 +32,11 @@ is not evidence of cleanliness.
 from __future__ import annotations
 
 import hashlib
+import random
 import re
 from collections.abc import Iterator
 from dataclasses import asdict, dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from . import identifiers
 from .gitio import (
@@ -43,11 +44,14 @@ from .gitio import (
     Commit,
     changed_lines,
     changed_sides,
+    commit_time,
     diff_line_counts,
     file_diff,
+    head_sha,
     iter_commits,
+    list_files,
 )
-from .paths import Kind, classify
+from .paths import TEST_PATH_MARKERS, Kind, classify
 
 __all__ = ["Example", "MineConfig", "mine_repo", "LABEL_DRIFT", "LABEL_CLEAN"]
 
@@ -57,6 +61,24 @@ LABEL_CLEAN = "clean"
 BASIS_DOC_ONLY = "doc_only_commit_modified_existing_prose"
 BASIS_COCHANGE = "doc_and_code_both_modified_sharing_identifier"
 BASIS_POST_FIX = "state_immediately_after_human_fix"
+BASIS_NEVER_COCHANGED = "pair_never_cochanged_in_mined_history"
+BASIS_NEVER_COCHANGED_RELATED_PATH = "pair_never_cochanged_but_path_related"
+
+SHAPE_NEGATIVE = "negative"
+SHAPE_NEGATIVE_EASY = "negative_easy"
+
+# Path tokens too common to imply that two files are about the same thing. Without
+# this, every doc shares `docs` with every other doc and every module shares `src`,
+# so "related paths" degenerates back into a uniform draw while looking selective.
+_GENERIC_PATH_TOKENS = frozenset(
+    {
+        "api", "src", "lib", "docs", "doc", "documentation", "guide", "guides",
+        "index", "readme", "readme_md", "main", "core", "utils", "util", "common",
+        "base", "misc", "internal", "advanced", "usage", "reference", "overview",
+        "intro", "introduction", "quickstart", "tutorial", "tutorials", "examples",
+        "example", "test", "tests", "init", "py", "md", "rst", "txt", "source",
+    }
+)
 
 # Doc-only commits whose subject says the change was cosmetic. These are real
 # doc edits but not drift: nothing about the code was ever misdescribed. Left in,
@@ -110,6 +132,18 @@ class MineConfig:
     # Treat dotted version literals as identifiers. Additive, so its effect needs
     # fresh labels rather than the retention test.
     match_versions: bool = True
+    # Negatives from doc/code pairs that never co-changed anywhere in the mined
+    # window. Zero by default: switching them on changes the corpus composition, and
+    # every count previously reported would silently mean something different.
+    #
+    # These are the only negatives that permit a false-positive rate at all. Matched
+    # negatives answer "does the detector notice the fix?"; they cannot answer "does
+    # the detector stay quiet on an unrelated pair?", because in a matched negative
+    # the doc genuinely is about that code.
+    easy_negatives_per_repo: int = 0
+    # Sampling is seeded per repo, because the manifest promises byte-identical
+    # replay and an unseeded draw would break that promise silently.
+    easy_negative_seed: int = 17
     # Shape A only. Require that some identifier was *withdrawn* from both the doc
     # and the code, not merely that the two diffs share one. Added 2026-09-18 after
     # the second hand-review, where `new` -- a feature landing with its own
@@ -346,6 +380,207 @@ def _mine_commit(
             emitted += 1
 
 
+def _path_tokens(path: str) -> frozenset[str]:
+    """Meaningful words in a path, as a crude proxy for what a file is about.
+
+    `docs/api/cookies.rst` and `requests/cookies.py` share `cookies`. That is not a
+    claim that either describes the other -- it is only enough of a hint to sample a
+    negative that is harder than a random one.
+    """
+    words = re.split(r"[^A-Za-z0-9]+", path.lower())
+    return frozenset(
+        word for word in words if len(word) >= 3 and word not in _GENERIC_PATH_TOKENS
+    )
+
+
+def _stem(path: str) -> str:
+    return PurePosixPath(path).stem.lower()
+
+
+def _looks_related(doc_path: str, code_path: str) -> bool:
+    """Whether two paths suggest, on name alone, that they describe one thing.
+
+    Stem equality counts even when the stem is in `_GENERIC_PATH_TOKENS`, and that
+    exception is the whole point. `docs/api.rst` against `src/requests/api.py` is an
+    obviously related pair; the stoplist reduces both paths to no tokens at all, so a
+    token-only test calls them unrelated and files one of the hardest available
+    negatives in the tier reserved for the easiest. That inverts what the number
+    means -- a detector firing there would be counted against the arm cited to show
+    it does not fire on nonsense.
+    """
+    if _stem(doc_path) == _stem(code_path):
+        return True
+    return bool(_path_tokens(doc_path) & _path_tokens(code_path))
+
+
+# Doc-shaped files that are not documentation *about the code*. `classify` keeps
+# them on purpose -- a README at a repo root is prime drift territory, and the
+# classifier has no cheap way to tell that one from `tests/certs/README.md`, so it
+# errs towards keeping. Sampling negatives can afford the distinction, so it is drawn
+# here rather than by widening `classify`: that would change the positive corpus and
+# break the byte-identical replay every committed manifest promises, in exchange for
+# a contamination measured at 3 rows in 5098.
+_EXCLUDED_DOC_LOCATIONS = (*TEST_PATH_MARKERS, ".github/")
+
+
+def _documents_code(path: str) -> bool:
+    lowered = path.lower()
+    return not any(marker in lowered for marker in _EXCLUDED_DOC_LOCATIONS)
+
+
+def _easy_negatives(
+    repo_dir: Path,
+    repo: str,
+    cfg: MineConfig,
+    rev: str,
+    cochanged: frozenset[tuple[str, str]],
+    seen: set[str],
+) -> Iterator[Example]:
+    """Negatives from doc/code pairs with no history of changing together.
+
+    What this is for, precisely: matched negatives cannot measure a false-positive
+    rate. In a matched negative the doc really is about that code -- it was about it
+    one commit earlier, wrongly. So a detector that fires on everything scores well
+    on them. These pairs are the control: a detector with any specificity must stay
+    silent on a pair that has no relationship at all.
+
+    Two flavours are emitted, distinguished by `label_basis`, because a single
+    blended specificity number would hide the only interesting part:
+
+    * `BASIS_NEVER_COCHANGED` -- a random pair whose paths suggest no relationship.
+      Genuinely easy: `docs/index.rst` against `flask/cli.py` is not a judgement
+      call. A detector that fires here is broken, so this measures a floor and little
+      else. Pairs that *do* look related are excluded from this arm rather than left
+      to land in it by chance, or the easy tier quietly contains hard cases.
+    * `BASIS_NEVER_COCHANGED_RELATED_PATH` -- the paths share a distinctive word or a
+      filename, so the pair looks related and never was. Much closer to what stage 2
+      retrieval will actually hand the detector, and therefore the number that will
+      matter.
+
+    Neither is the real production distribution, which is whatever retrieval decides
+    to surface, and retrieval does not exist yet. Sampling uniformly over all pairs
+    when the deployed system will see pre-filtered plausible pairs would price
+    specificity far too cheaply; the related-path arm exists to keep that honest
+    until the real distribution can be measured.
+
+    Two further limits, worth restating wherever these numbers are reported:
+
+    * "Never co-changed in the mined window" is weaker than it sounds. The window is
+      bounded by `--limit`, so a pair that co-changed just outside it looks unrelated
+      here. Widening the window can only shrink this set, never grow it.
+    * A never-co-changed pair is *presumed* clean, not confirmed clean. Nobody read
+      it. A doc can perfectly well be false about code it was never edited alongside
+      -- that is arguably the most interesting kind of drift, and it is exactly what
+      this label cannot see. So these support a false-positive rate and must not be
+      quoted as accuracy.
+    """
+    tree = list_files(repo_dir, rev)
+    docs = sorted(
+        path
+        for path in tree
+        if classify(path) is Kind.DOC and _documents_code(path)
+    )
+    code = sorted(path for path in tree if classify(path) is Kind.CODE)
+    if not docs or not code:
+        return
+
+    at_sha = head_sha(repo_dir, rev)
+    when = commit_time(repo_dir, rev)
+    # Seeded on the repo so each repo draws independently and reproducibly. Every
+    # collection sampled from below is a sorted list rather than a set: set iteration
+    # order over strings varies with PYTHONHASHSEED, which would make the draw differ
+    # between processes and quietly break the manifest's byte-identical replay.
+    rng = random.Random(f"{repo}:{cfg.easy_negative_seed}")
+
+    # Indexes from token and from filename to code files, so a plausible counterpart
+    # for a doc can be found without materialising the full docs x code product.
+    code_by_token: dict[str, list[str]] = {}
+    code_by_stem: dict[str, list[str]] = {}
+    for path in code:
+        for token in _path_tokens(path):
+            code_by_token.setdefault(token, []).append(path)
+        code_by_stem.setdefault(_stem(path), []).append(path)
+
+    candidate_cache: dict[str, list[str]] = {}
+
+    def related_candidates(doc_path: str) -> list[str]:
+        """Code files this doc looks related to. Sorted, because set iteration order
+        over strings varies with PYTHONHASHSEED and the draw has to be replayable."""
+        if doc_path not in candidate_cache:
+            found = set(code_by_stem.get(_stem(doc_path), ()))
+            for token in _path_tokens(doc_path):
+                found.update(code_by_token.get(token, ()))
+            candidate_cache[doc_path] = sorted(found)
+        return candidate_cache[doc_path]
+
+    def emit(doc_path: str, code_path: str, basis: str) -> Example | None:
+        if (doc_path, code_path) in cochanged:
+            return None
+        example_id = _example_id(repo, at_sha, doc_path, code_path, LABEL_CLEAN)
+        if example_id in seen:
+            return None
+        seen.add(example_id)
+        return Example(
+            example_id=example_id,
+            repo=repo,
+            label=LABEL_CLEAN,
+            label_basis=basis,
+            shape=SHAPE_NEGATIVE_EASY,
+            doc_path=doc_path,
+            code_path=code_path,
+            at_sha=at_sha,
+            # There is no fixing commit. Empty rather than reusing `at_sha`, so that
+            # anything joining on `fix_sha` cannot mistake this for a correction.
+            fix_sha="",
+            parent_sha="",
+            committed_at=when,
+            subject=f"(no commit: {doc_path} and {code_path} never co-changed)",
+            doc_lines_added=0,
+            doc_lines_removed=0,
+            files_in_commit=0,
+        )
+
+    # Split the request evenly. The related-path arm can come up short in a repo
+    # whose plausible pairs have all co-changed -- which is the healthy case -- and
+    # the shortfall is left as a shortfall rather than topped up from the easy arm,
+    # because silently substituting easier negatives would inflate specificity.
+    related_target = cfg.easy_negatives_per_repo // 2
+    uniform_target = cfg.easy_negatives_per_repo - related_target
+
+    # Docs with at least one plausible counterpart, precomputed so the sampler is not
+    # rejecting on doc choice as well as on co-change.
+    related_docs = sorted(path for path in docs if related_candidates(path))
+
+    # Rejection sampling with a hard budget on each arm. Without the cap, a repo
+    # whose every plausible pair has co-changed would spin here rather than returning
+    # fewer examples, and the mine would hang instead of reporting a small number.
+    emitted = 0
+    for _ in range(max(related_target * 50, 1000)):
+        if emitted >= related_target or not related_docs:
+            break
+        doc_path = rng.choice(related_docs)
+        code_path = rng.choice(related_candidates(doc_path))
+        example = emit(doc_path, code_path, BASIS_NEVER_COCHANGED_RELATED_PATH)
+        if example is not None:
+            emitted += 1
+            yield example
+
+    emitted = 0
+    for _ in range(max(uniform_target * 50, 1000)):
+        if emitted >= uniform_target:
+            break
+        doc_path = rng.choice(docs)
+        code_path = rng.choice(code)
+        # A pair that looks related belongs in the other arm. Letting it land here by
+        # chance is how an "easy" specificity number comes to contain the hard cases.
+        if _looks_related(doc_path, code_path):
+            continue
+        example = emit(doc_path, code_path, BASIS_NEVER_COCHANGED)
+        if example is not None:
+            emitted += 1
+            yield example
+
+
 def mine_repo(
     repo_dir: Path,
     repo: str,
@@ -371,9 +606,31 @@ def mine_repo(
     # remain distinct examples and both survive. That is correct: they are genuinely
     # different trees.
     seen: set[str] = set()
+    cochanged: set[tuple[str, str]] = set()
     for commit in iter_commits(repo_dir, limit=limit, since=since, rev=rev):
+        # Co-occurrence is recorded from EVERY commit walked, including the ones the
+        # filters below reject. A pair that changed together in a discarded commit
+        # still has a real relationship, and calling it unrelated would drop a
+        # genuine drift candidate into the negative set -- a label that is not merely
+        # missing but wrong, and wrong in the direction that flatters the detector.
+        docs, code, _other = _partition(commit.files)
+        for doc in docs:
+            for source in code:
+                cochanged.add((doc.path, source.path))
+                # Renames: a pair is related under its old name too, otherwise the
+                # rename makes history look like it never happened.
+                if doc.old_path:
+                    cochanged.add((doc.old_path, source.path))
+                if source.old_path:
+                    cochanged.add((doc.path, source.old_path))
+
         for example in _mine_commit(repo_dir, repo, commit, cfg):
             if example.example_id in seen:
                 continue
             seen.add(example.example_id)
             yield example
+
+    if cfg.easy_negatives_per_repo:
+        yield from _easy_negatives(
+            repo_dir, repo, cfg, rev, frozenset(cochanged), seen
+        )

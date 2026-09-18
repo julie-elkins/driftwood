@@ -61,7 +61,7 @@ _ENGLISH = frozenset(
     """
     also although always because before being below between both cannot change
     changed changes could does doing done during each either else even every
-    example examples first following from给 have here however into itself just
+    example examples first following from have here however into itself just
     like make makes many more most must need needs note only other others over
     same should since some such than that their them then there these they this
     those through under until using very were what when where which while will

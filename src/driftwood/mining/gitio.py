@@ -20,10 +20,13 @@ __all__ = [
     "Commit",
     "GitError",
     "changed_lines",
+    "commit_time",
     "diff_line_counts",
     "ensure_clone",
     "file_diff",
+    "head_sha",
     "iter_commits",
+    "list_files",
     "local_name_for",
 ]
 
@@ -155,6 +158,27 @@ def head_sha(repo: Path, rev: str = "HEAD") -> str:
     a different corpus.
     """
     return _git(repo, "rev-parse", rev).strip()
+
+
+def list_files(repo: Path, rev: str = "HEAD") -> list[str]:
+    """Every path present in the tree at `rev`.
+
+    Needed to build negatives from pairs that never co-changed: such a pair has no
+    commit to read paths from, so the only place to learn that both files exist at
+    the same time is the tree itself.
+    """
+    out = _git(repo, "ls-tree", "-r", "--name-only", rev)
+    return [line for line in out.splitlines() if line]
+
+
+def commit_time(repo: Path, rev: str = "HEAD") -> int:
+    """Commit timestamp of `rev`, as a unix epoch.
+
+    Exists so that an example describing a tree state rather than a fix still
+    carries a real date. A zero timestamp would sort to 1970 and quietly corrupt
+    any later time-based train/test split.
+    """
+    return int(_git(repo, "show", "-s", "--format=%ct", rev).strip())
 
 
 def iter_commits(

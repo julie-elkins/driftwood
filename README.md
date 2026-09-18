@@ -115,6 +115,14 @@ Other limits, stated rather than buried:
 - **A doc nobody fixed is not a doc that was correct.** It may be drift nobody noticed.
   Positives here are strong evidence; negatives are weak, and no published false-positive
   rate is meaningful without that caveat.
+- **The false-positive denominator exists but has not been used yet.** Until now the only
+  negatives were *matched* ones — the same doc/code pair one commit after the fix — and those
+  cannot measure a false-positive rate at all, because in a matched negative the doc genuinely
+  *is* about that code. A detector that fires on every pair scores well on them. The corpus now
+  also carries pairs that never co-changed, in two tiers reported separately: random pairs
+  whose paths suggest nothing (a floor), and pairs whose paths look related but have no shared
+  history (much closer to what retrieval will hand the detector). No detector exists yet, so
+  there is no number here — only a denominator that will support one.
 - **The first 40 cases all came from one repo**, `psf/requests`, which turned out to be an
   outlier. Measured on the pre-filter corpus it yielded 61 shape-A positives against 785
   shape-B — 12.9:1 — where every other repo was balanced or the reverse (pydantic 809:348, a
@@ -131,7 +139,14 @@ Other limits, stated rather than buried:
   a 5.3x reduction on an arm that does contain real drift is now a recall risk nobody has
   measured.
 - **The English and platform stoplists are hand-built and will miss whole families.** A
-  known live example: a reworded sentence still leaks the token `well`.
+  known live example: a reworded sentence still leaks the token `well`. A general scan for
+  non-ASCII characters also turned up a corrupted entry — `from` had a stray CJK character
+  glued to it, so the stoplist held the nonsense token `from给` and not `from`. Inert, as it
+  happens: `from` is a Python keyword and the keyword stoplist caught it anyway, and the
+  tokeniser's `[A-Za-z_][A-Za-z0-9_]*` could never emit a token containing that character. But
+  it was invisible to reading and to 43 tests, and only a scan found it. Measured at 0
+  occurrences across 2134 shape-A positives before being fixed; the stoplists are now
+  ASCII-clean.
 
 ## Reproducibility
 
@@ -180,6 +195,21 @@ label set that predates manifests and therefore cannot be regenerated.
 - **Matched negatives**: the same doc/code pair at the fixing commit itself. Same file, same
   repo, seconds apart in project time, differing only in whether the correction landed. A
   detector that fires equally on both is not detecting drift.
+- **Never-co-changed negatives come in two tiers, not one**, because a uniformly random
+  doc/code pair is trivially unrelated and a specificity number built only from those would
+  price the problem far below reality — in production the detector sees pairs *retrieval*
+  thought were plausible. Retrieval is stage 2, so the real distribution cannot be sampled
+  yet; the harder tier samples pairs whose paths look related but share no history, as a
+  stand-in. Two things surfaced from printing fourteen sampled pairs and reading them, neither
+  of which any test written from the design would have caught: `docs/api.rst` against
+  `src/requests/api.py` was being filed as a *random* pair (`api` is stoplisted, so both paths
+  reduced to no tokens), which inverts the meaning of the arm cited to show the detector does
+  not fire on nonsense; and `tests/certs/README.md` was being sampled as documentation, 74 of
+  739 negatives, including every single hard negative for one repo. The harder tier is also
+  **scarce exactly where a repo is small and well maintained** — asking 100 per repo yields 100
+  from fastapi and pydantic but 1 from `requests`, because in a mature small repo nearly every
+  plausible-looking pair *has* co-changed. So it is reported per repo and never pooled; pooling
+  would rebuild round 1's single-repo confound in a new place.
 
 ## Roadmap
 
@@ -202,12 +232,17 @@ correctly. A measurement demanded that stage; it was not drawn on a diagram firs
 
 ```
 uv sync
-uv run driftwood mine --repos psf/requests pallets/flask --limit 4000 --out data/labels.jsonl
-uv run driftwood stats --labels data/labels.jsonl
-uv run driftwood sample --labels data/labels.jsonl --shape A -n 25 --out review/batch.md
-uv run driftwood score review/batch.md --labels data/labels.jsonl
+uv run driftwood mine --repos psf/requests pallets/flask --limit 4000 --out data/mine.jsonl
+uv run driftwood stats --labels data/mine.jsonl
+uv run driftwood sample --labels data/mine.jsonl --shape A -n 25 --out review/batch.md
+uv run driftwood score review/batch.md --labels data/mine.jsonl
 uv run pytest
 ```
+
+Note the explicit `--out`. `mine` refuses to overwrite an existing file without `--force`,
+because the flag's default points at `data/labels.jsonl` — the one label set here that
+predates manifests and cannot be regenerated. An earlier version of the example above
+omitted `--out`, and duly destroyed it. Recovered from git; the guard is the actual fix.
 
 `sample` writes a review sheet a human fills in; `score` reads the verdicts back and reports
 precision per shape and per basis with intervals. `retention` checks how a rebuilt label set
