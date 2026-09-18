@@ -35,6 +35,18 @@ data/labels-v*.jsonl
 # that one is the ground truth.
 review/2c/text/
 
+# Credentials. Stage 3's model arm reads ANTHROPIC_API_KEY from the environment and
+# nothing here ever writes it down, so these patterns guard against a habit rather
+# than against this code: a `.env` dropped in to try something, an editor's backup of
+# one. This repository is public, and a pushed key is a key that has to be revoked
+# rather than deleted -- `git rm` does not unpublish it.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets.*
+
 # Never ignored, and worth saying why:
 #   review/*.md              -- the hand labels. Irreplaceable; every number
 #                               downstream is measured against them.
