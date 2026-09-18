@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import re
 import subprocess
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -28,6 +28,7 @@ __all__ = [
     "iter_commits",
     "list_files",
     "local_name_for",
+    "read_blobs",
 ]
 
 # ASCII record and unit separators. Commit subjects contain newlines, tabs, pipes
@@ -169,6 +170,59 @@ def list_files(repo: Path, rev: str = "HEAD") -> list[str]:
     """
     out = _git(repo, "ls-tree", "-r", "--name-only", rev)
     return [line for line in out.splitlines() if line]
+
+
+def read_blobs(repo: Path, rev: str, paths: Iterable[str]) -> dict[str, str]:
+    """Contents of many paths at one rev, in a single git invocation.
+
+    `git show rev:path` per file would be correct and is what the rest of this
+    module does, but the retrieval eval reads every code file in a repo -- 527 of
+    them in fastapi -- and a process spawn per file dominates the runtime of the
+    whole eval. `cat-file --batch` streams them over one pipe instead.
+
+    A path that does not exist at `rev` is *omitted from the result*, not returned
+    empty. An empty string would rank as a document with no terms and silently
+    score zero, which is indistinguishable from a real file the ranker got wrong;
+    a missing key makes the caller decide, and the callers here count them.
+
+    Binary and undecodable files come back with replacement characters rather than
+    raising. They are noise in a lexical ranker either way, and a UnicodeDecodeError
+    part-way through a 500-file read would lose the whole batch.
+    """
+    wanted = list(paths)
+    if not wanted:
+        return {}
+
+    proc = subprocess.Popen(
+        [*_BASE_ARGS, "-C", str(repo), "cat-file", "--batch"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    assert proc.stdin is not None and proc.stdout is not None
+    query = "".join(f"{rev}:{path}\n" for path in wanted)
+    proc.stdin.write(query.encode())
+    proc.stdin.close()
+
+    out: dict[str, str] = {}
+    try:
+        for path in wanted:
+            header = proc.stdout.readline()
+            if not header:
+                raise GitError(f"git cat-file ended early in {repo} at {path}")
+            fields = header.split()
+            # `<oid> missing`, or `<name> <reason>` for malformed input. Either way
+            # there is no body to consume, so do not try to read one.
+            if len(fields) < 3:
+                continue
+            size = int(fields[2])
+            body = proc.stdout.read(size)
+            proc.stdout.read(1)  # the newline git writes after every body
+            out[path] = body.decode("utf-8", errors="replace")
+    finally:
+        proc.stdout.close()
+        proc.wait()
+    return out
 
 
 def commit_time(repo: Path, rev: str = "HEAD") -> int:
