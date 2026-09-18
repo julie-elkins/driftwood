@@ -18,6 +18,12 @@ embed = [
     "numpy>=2.0",
     "sentence-transformers>=3.0",
 ]
+# Stage 3's model arm. An extra for the same reason: the three floors and the
+# no-model lexical baseline -- which are what make the model's number mean anything --
+# run with neither this package nor a key, and `judge-eval` defaults to exactly those.
+judge = [
+    "anthropic>=0.40",
+]
 
 [project.scripts]
 driftwood = "driftwood.mining.cli:main"

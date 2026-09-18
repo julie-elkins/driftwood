@@ -464,6 +464,13 @@ def main(argv: list[str] | None = None) -> int:
 
     add_retrieval_parser(subparsers)
 
+    # Stage 3, likewise. Imported lazily so that `mine` and `score` still run on a
+    # machine with no `anthropic` installed -- the judge package's model arm is an
+    # optional extra and its floors are not.
+    from ..judge.cli import add_parser as add_judge_parser
+
+    add_judge_parser(subparsers)
+
     args = parser.parse_args(argv)
     return int(args.func(args))
 

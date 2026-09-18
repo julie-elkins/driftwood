@@ -1,0 +1,876 @@
+{
+  "arms": {
+    "oracle": {
+      "judges": {
+        "always-false": {
+          "abstained": 0,
+          "abstention_calibration": {
+            "abstained_on_held_out": 0,
+            "held_out": 0,
+            "held_out_rate": 0.0,
+            "lift": 0.0,
+            "scoreable_rate": 0.0
+          },
+          "accuracy_all": 0.28888888888888886,
+          "accuracy_answered": 0.28888888888888886,
+          "by_repo": {
+            "encode/httpx": {
+              "f1": 0.6666666666666666,
+              "n": 2,
+              "readable": false
+            },
+            "fastapi/fastapi": {
+              "f1": 0.0,
+              "n": 1,
+              "readable": false
+            },
+            "pallets/flask": {
+              "f1": 0.5,
+              "n": 12,
+              "readable": true
+            },
+            "psf/requests": {
+              "f1": 0.42857142857142855,
+              "n": 22,
+              "readable": true
+            },
+            "pydantic/pydantic": {
+              "f1": 0.4,
+              "n": 8,
+              "readable": false
+            }
+          },
+          "by_shape": {
+            "A": {
+              "f1": 0.4482758620689655,
+              "n": 45,
+              "readable": true
+            },
+            "B": {
+              "f1": 0.0,
+              "n": 0,
+              "readable": false
+            }
+          },
+          "by_verdict": {
+            "cosmetic": {
+              "false": 20
+            },
+            "drift": {
+              "false": 13
+            },
+            "new": {
+              "false": 8
+            },
+            "unrelated": {
+              "false": 4
+            }
+          },
+          "confusion": {
+            "fn": 0,
+            "fp": 32,
+            "tn": 0,
+            "tp": 13
+          },
+          "f1": 0.4482758620689655,
+          "n": 45,
+          "precision": 0.28888888888888886,
+          "recall": 1.0,
+          "unparsed": 0
+        },
+        "always-not-false": {
+          "abstained": 0,
+          "abstention_calibration": {
+            "abstained_on_held_out": 0,
+            "held_out": 0,
+            "held_out_rate": 0.0,
+            "lift": 0.0,
+            "scoreable_rate": 0.0
+          },
+          "accuracy_all": 0.7111111111111111,
+          "accuracy_answered": 0.7111111111111111,
+          "by_repo": {
+            "encode/httpx": {
+              "f1": 0.0,
+              "n": 2,
+              "readable": false
+            },
+            "fastapi/fastapi": {
+              "f1": 0.0,
+              "n": 1,
+              "readable": false
+            },
+            "pallets/flask": {
+              "f1": 0.0,
+              "n": 12,
+              "readable": true
+            },
+            "psf/requests": {
+              "f1": 0.0,
+              "n": 22,
+              "readable": true
+            },
+            "pydantic/pydantic": {
+              "f1": 0.0,
+              "n": 8,
+              "readable": false
+            }
+          },
+          "by_shape": {
+            "A": {
+              "f1": 0.0,
+              "n": 45,
+              "readable": true
+            },
+            "B": {
+              "f1": 0.0,
+              "n": 0,
+              "readable": false
+            }
+          },
+          "by_verdict": {
+            "cosmetic": {
+              "not-false": 20
+            },
+            "drift": {
+              "not-false": 13
+            },
+            "new": {
+              "not-false": 8
+            },
+            "unrelated": {
+              "not-false": 4
+            }
+          },
+          "confusion": {
+            "fn": 13,
+            "fp": 0,
+            "tn": 32,
+            "tp": 0
+          },
+          "f1": 0.0,
+          "n": 45,
+          "precision": 0.0,
+          "recall": 0.0,
+          "unparsed": 0
+        },
+        "lexical-absence(>=1)": {
+          "abstained": 0,
+          "abstention_calibration": {
+            "abstained_on_held_out": 0,
+            "held_out": 0,
+            "held_out_rate": 0.0,
+            "lift": 0.0,
+            "scoreable_rate": 0.0
+          },
+          "accuracy_all": 0.3333333333333333,
+          "accuracy_answered": 0.3333333333333333,
+          "by_repo": {
+            "encode/httpx": {
+              "f1": 0.6666666666666666,
+              "n": 2,
+              "readable": false
+            },
+            "fastapi/fastapi": {
+              "f1": 0.0,
+              "n": 1,
+              "readable": false
+            },
+            "pallets/flask": {
+              "f1": 0.5333333333333333,
+              "n": 12,
+              "readable": true
+            },
+            "psf/requests": {
+              "f1": 0.42857142857142855,
+              "n": 22,
+              "readable": true
+            },
+            "pydantic/pydantic": {
+              "f1": 0.4444444444444445,
+              "n": 8,
+              "readable": false
+            }
+          },
+          "by_shape": {
+            "A": {
+              "f1": 0.46428571428571425,
+              "n": 45,
+              "readable": true
+            },
+            "B": {
+              "f1": 0.0,
+              "n": 0,
+              "readable": false
+            }
+          },
+          "by_verdict": {
+            "cosmetic": {
+              "false": 20
+            },
+            "drift": {
+              "false": 13
+            },
+            "new": {
+              "false": 8
+            },
+            "unrelated": {
+              "false": 2,
+              "not-false": 2
+            }
+          },
+          "confusion": {
+            "fn": 0,
+            "fp": 30,
+            "tn": 2,
+            "tp": 13
+          },
+          "f1": 0.46428571428571425,
+          "n": 45,
+          "precision": 0.3023255813953488,
+          "recall": 1.0,
+          "unparsed": 0
+        },
+        "lexical-absence(>=3)": {
+          "abstained": 0,
+          "abstention_calibration": {
+            "abstained_on_held_out": 0,
+            "held_out": 0,
+            "held_out_rate": 0.0,
+            "lift": 0.0,
+            "scoreable_rate": 0.0
+          },
+          "accuracy_all": 0.35555555555555557,
+          "accuracy_answered": 0.35555555555555557,
+          "by_repo": {
+            "encode/httpx": {
+              "f1": 0.6666666666666666,
+              "n": 2,
+              "readable": false
+            },
+            "fastapi/fastapi": {
+              "f1": 0.0,
+              "n": 1,
+              "readable": false
+            },
+            "pallets/flask": {
+              "f1": 0.5333333333333333,
+              "n": 12,
+              "readable": true
+            },
+            "psf/requests": {
+              "f1": 0.42857142857142855,
+              "n": 22,
+              "readable": true
+            },
+            "pydantic/pydantic": {
+              "f1": 0.5,
+              "n": 8,
+              "readable": false
+            }
+          },
+          "by_shape": {
+            "A": {
+              "f1": 0.4727272727272727,
+              "n": 45,
+              "readable": true
+            },
+            "B": {
+              "f1": 0.0,
+              "n": 0,
+              "readable": false
+            }
+          },
+          "by_verdict": {
+            "cosmetic": {
+              "false": 19,
+              "not-false": 1
+            },
+            "drift": {
+              "false": 13
+            },
+            "new": {
+              "false": 8
+            },
+            "unrelated": {
+              "false": 2,
+              "not-false": 2
+            }
+          },
+          "confusion": {
+            "fn": 0,
+            "fp": 29,
+            "tn": 3,
+            "tp": 13
+          },
+          "f1": 0.4727272727272727,
+          "n": 45,
+          "precision": 0.30952380952380953,
+          "recall": 1.0,
+          "unparsed": 0
+        },
+        "lexical-absence(>=6)": {
+          "abstained": 0,
+          "abstention_calibration": {
+            "abstained_on_held_out": 0,
+            "held_out": 0,
+            "held_out_rate": 0.0,
+            "lift": 0.0,
+            "scoreable_rate": 0.0
+          },
+          "accuracy_all": 0.4,
+          "accuracy_answered": 0.4,
+          "by_repo": {
+            "encode/httpx": {
+              "f1": 0.6666666666666666,
+              "n": 2,
+              "readable": false
+            },
+            "fastapi/fastapi": {
+              "f1": 0.0,
+              "n": 1,
+              "readable": false
+            },
+            "pallets/flask": {
+              "f1": 0.5333333333333333,
+              "n": 12,
+              "readable": true
+            },
+            "psf/requests": {
+              "f1": 0.4615384615384615,
+              "n": 22,
+              "readable": true
+            },
+            "pydantic/pydantic": {
+              "f1": 0.5,
+              "n": 8,
+              "readable": false
+            }
+          },
+          "by_shape": {
+            "A": {
+              "f1": 0.4905660377358491,
+              "n": 45,
+              "readable": true
+            },
+            "B": {
+              "f1": 0.0,
+              "n": 0,
+              "readable": false
+            }
+          },
+          "by_verdict": {
+            "cosmetic": {
+              "false": 17,
+              "not-false": 3
+            },
+            "drift": {
+              "false": 13
+            },
+            "new": {
+              "false": 8
+            },
+            "unrelated": {
+              "false": 2,
+              "not-false": 2
+            }
+          },
+          "confusion": {
+            "fn": 0,
+            "fp": 27,
+            "tn": 5,
+            "tp": 13
+          },
+          "f1": 0.4905660377358491,
+          "n": 45,
+          "precision": 0.325,
+          "recall": 1.0,
+          "unparsed": 0
+        }
+      },
+      "noise_range": {
+        "accuracy_all": [
+          0.4888888888888889,
+          0.6,
+          0.6888888888888889
+        ],
+        "f1": [
+          0.08695652173913043,
+          0.28571428571428575,
+          0.4571428571428572
+        ],
+        "precision": [
+          0.1,
+          0.2857142857142857,
+          0.4666666666666667
+        ]
+      }
+    },
+    "retrieved": {
+      "judges": {
+        "always-false": {
+          "abstained": 0,
+          "abstention_calibration": {
+            "abstained_on_held_out": 0,
+            "held_out": 20,
+            "held_out_rate": 0.0,
+            "lift": 0.0,
+            "scoreable_rate": 0.0
+          },
+          "accuracy_all": 0.2857142857142857,
+          "accuracy_answered": 0.2857142857142857,
+          "by_repo": {
+            "encode/httpx": {
+              "f1": 0.7692307692307693,
+              "n": 8,
+              "readable": false
+            },
+            "fastapi/fastapi": {
+              "f1": 0.2222222222222222,
+              "n": 8,
+              "readable": false
+            },
+            "pallets/flask": {
+              "f1": 0.4864864864864865,
+              "n": 28,
+              "readable": true
+            },
+            "psf/requests": {
+              "f1": 0.3548387096774193,
+              "n": 51,
+              "readable": true
+            },
+            "pydantic/pydantic": {
+              "f1": 0.5714285714285715,
+              "n": 10,
+              "readable": true
+            }
+          },
+          "by_shape": {
+            "A": {
+              "f1": 0.4482758620689655,
+              "n": 45,
+              "readable": true
+            },
+            "B": {
+              "f1": 0.4415584415584416,
+              "n": 60,
+              "readable": true
+            }
+          },
+          "by_verdict": {
+            "cosmetic": {
+              "false": 61
+            },
+            "drift": {
+              "false": 30
+            },
+            "new": {
+              "false": 10
+            },
+            "unclear": {
+              "false": 20
+            },
+            "unrelated": {
+              "false": 4
+            }
+          },
+          "confusion": {
+            "fn": 0,
+            "fp": 75,
+            "tn": 0,
+            "tp": 30
+          },
+          "f1": 0.4444444444444445,
+          "n": 105,
+          "precision": 0.2857142857142857,
+          "recall": 1.0,
+          "unparsed": 0
+        },
+        "always-not-false": {
+          "abstained": 0,
+          "abstention_calibration": {
+            "abstained_on_held_out": 0,
+            "held_out": 20,
+            "held_out_rate": 0.0,
+            "lift": 0.0,
+            "scoreable_rate": 0.0
+          },
+          "accuracy_all": 0.7142857142857143,
+          "accuracy_answered": 0.7142857142857143,
+          "by_repo": {
+            "encode/httpx": {
+              "f1": 0.0,
+              "n": 8,
+              "readable": false
+            },
+            "fastapi/fastapi": {
+              "f1": 0.0,
+              "n": 8,
+              "readable": false
+            },
+            "pallets/flask": {
+              "f1": 0.0,
+              "n": 28,
+              "readable": true
+            },
+            "psf/requests": {
+              "f1": 0.0,
+              "n": 51,
+              "readable": true
+            },
+            "pydantic/pydantic": {
+              "f1": 0.0,
+              "n": 10,
+              "readable": true
+            }
+          },
+          "by_shape": {
+            "A": {
+              "f1": 0.0,
+              "n": 45,
+              "readable": true
+            },
+            "B": {
+              "f1": 0.0,
+              "n": 60,
+              "readable": true
+            }
+          },
+          "by_verdict": {
+            "cosmetic": {
+              "not-false": 61
+            },
+            "drift": {
+              "not-false": 30
+            },
+            "new": {
+              "not-false": 10
+            },
+            "unclear": {
+              "not-false": 20
+            },
+            "unrelated": {
+              "not-false": 4
+            }
+          },
+          "confusion": {
+            "fn": 30,
+            "fp": 0,
+            "tn": 75,
+            "tp": 0
+          },
+          "f1": 0.0,
+          "n": 105,
+          "precision": 0.0,
+          "recall": 0.0,
+          "unparsed": 0
+        },
+        "lexical-absence(>=1)": {
+          "abstained": 0,
+          "abstention_calibration": {
+            "abstained_on_held_out": 0,
+            "held_out": 20,
+            "held_out_rate": 0.0,
+            "lift": 0.0,
+            "scoreable_rate": 0.0
+          },
+          "accuracy_all": 0.3333333333333333,
+          "accuracy_answered": 0.3333333333333333,
+          "by_repo": {
+            "encode/httpx": {
+              "f1": 0.7692307692307693,
+              "n": 8,
+              "readable": false
+            },
+            "fastapi/fastapi": {
+              "f1": 0.2222222222222222,
+              "n": 8,
+              "readable": false
+            },
+            "pallets/flask": {
+              "f1": 0.5,
+              "n": 28,
+              "readable": true
+            },
+            "psf/requests": {
+              "f1": 0.3548387096774193,
+              "n": 51,
+              "readable": true
+            },
+            "pydantic/pydantic": {
+              "f1": 0.6666666666666666,
+              "n": 10,
+              "readable": true
+            }
+          },
+          "by_shape": {
+            "A": {
+              "f1": 0.4727272727272727,
+              "n": 45,
+              "readable": true
+            },
+            "B": {
+              "f1": 0.4383561643835616,
+              "n": 60,
+              "readable": true
+            }
+          },
+          "by_verdict": {
+            "cosmetic": {
+              "false": 57,
+              "not-false": 4
+            },
+            "drift": {
+              "false": 29,
+              "not-false": 1
+            },
+            "new": {
+              "false": 10
+            },
+            "unclear": {
+              "false": 20
+            },
+            "unrelated": {
+              "false": 2,
+              "not-false": 2
+            }
+          },
+          "confusion": {
+            "fn": 1,
+            "fp": 69,
+            "tn": 6,
+            "tp": 29
+          },
+          "f1": 0.45312500000000006,
+          "n": 105,
+          "precision": 0.29591836734693877,
+          "recall": 0.9666666666666667,
+          "unparsed": 0
+        },
+        "lexical-absence(>=3)": {
+          "abstained": 0,
+          "abstention_calibration": {
+            "abstained_on_held_out": 0,
+            "held_out": 20,
+            "held_out_rate": 0.0,
+            "lift": 0.0,
+            "scoreable_rate": 0.0
+          },
+          "accuracy_all": 0.34285714285714286,
+          "accuracy_answered": 0.34285714285714286,
+          "by_repo": {
+            "encode/httpx": {
+              "f1": 0.7692307692307693,
+              "n": 8,
+              "readable": false
+            },
+            "fastapi/fastapi": {
+              "f1": 0.25,
+              "n": 8,
+              "readable": false
+            },
+            "pallets/flask": {
+              "f1": 0.4666666666666666,
+              "n": 28,
+              "readable": true
+            },
+            "psf/requests": {
+              "f1": 0.3548387096774193,
+              "n": 51,
+              "readable": true
+            },
+            "pydantic/pydantic": {
+              "f1": 0.6666666666666666,
+              "n": 10,
+              "readable": true
+            }
+          },
+          "by_shape": {
+            "A": {
+              "f1": 0.4528301886792453,
+              "n": 45,
+              "readable": true
+            },
+            "B": {
+              "f1": 0.44444444444444453,
+              "n": 60,
+              "readable": true
+            }
+          },
+          "by_verdict": {
+            "cosmetic": {
+              "false": 56,
+              "not-false": 5
+            },
+            "drift": {
+              "false": 28,
+              "not-false": 2
+            },
+            "new": {
+              "false": 9,
+              "not-false": 1
+            },
+            "unclear": {
+              "false": 20
+            },
+            "unrelated": {
+              "false": 2,
+              "not-false": 2
+            }
+          },
+          "confusion": {
+            "fn": 2,
+            "fp": 67,
+            "tn": 8,
+            "tp": 28
+          },
+          "f1": 0.44799999999999995,
+          "n": 105,
+          "precision": 0.29473684210526313,
+          "recall": 0.9333333333333333,
+          "unparsed": 0
+        },
+        "lexical-absence(>=6)": {
+          "abstained": 0,
+          "abstention_calibration": {
+            "abstained_on_held_out": 0,
+            "held_out": 20,
+            "held_out_rate": 0.0,
+            "lift": 0.0,
+            "scoreable_rate": 0.0
+          },
+          "accuracy_all": 0.38095238095238093,
+          "accuracy_answered": 0.38095238095238093,
+          "by_repo": {
+            "encode/httpx": {
+              "f1": 0.7692307692307693,
+              "n": 8,
+              "readable": false
+            },
+            "fastapi/fastapi": {
+              "f1": 0.25,
+              "n": 8,
+              "readable": false
+            },
+            "pallets/flask": {
+              "f1": 0.39999999999999997,
+              "n": 28,
+              "readable": true
+            },
+            "psf/requests": {
+              "f1": 0.3157894736842105,
+              "n": 51,
+              "readable": true
+            },
+            "pydantic/pydantic": {
+              "f1": 0.8,
+              "n": 10,
+              "readable": true
+            }
+          },
+          "by_shape": {
+            "A": {
+              "f1": 0.45454545454545453,
+              "n": 45,
+              "readable": true
+            },
+            "B": {
+              "f1": 0.4057971014492754,
+              "n": 60,
+              "readable": true
+            }
+          },
+          "by_verdict": {
+            "cosmetic": {
+              "false": 51,
+              "not-false": 10
+            },
+            "drift": {
+              "false": 24,
+              "not-false": 6
+            },
+            "new": {
+              "false": 6,
+              "not-false": 4
+            },
+            "unclear": {
+              "false": 17,
+              "not-false": 3
+            },
+            "unrelated": {
+              "false": 2,
+              "not-false": 2
+            }
+          },
+          "confusion": {
+            "fn": 6,
+            "fp": 59,
+            "tn": 16,
+            "tp": 24
+          },
+          "f1": 0.4247787610619469,
+          "n": 105,
+          "precision": 0.2891566265060241,
+          "recall": 0.8,
+          "unparsed": 0
+        }
+      },
+      "noise_range": {
+        "accuracy_all": [
+          0.5238095238095238,
+          0.5904761904761905,
+          0.6666666666666666
+        ],
+        "f1": [
+          0.17857142857142855,
+          0.2758620689655172,
+          0.39393939393939387
+        ],
+        "precision": [
+          0.1875,
+          0.27586206896551724,
+          0.4
+        ]
+      }
+    }
+  },
+  "generated_at": "2026-09-18T19:33:31+00:00",
+  "provenance": {
+    "arms": [
+      "oracle",
+      "retrieved"
+    ],
+    "balance": {
+      "held_out_unclear": 0,
+      "majority_accuracy": 0.7142857142857143,
+      "majority_class": "not-false",
+      "negative": 75,
+      "positive": 30,
+      "positive_rate": 0.2857142857142857,
+      "scoreable": 105
+    },
+    "corpus": {
+      "cases": 125,
+      "held_out_unclear": 20,
+      "scoreable": 105,
+      "sheets": 7,
+      "verdicts": 125,
+      "with_code_path": 45
+    },
+    "judges": [
+      "always-false",
+      "always-not-false",
+      "lexical-absence(>=1)",
+      "lexical-absence(>=3)",
+      "lexical-absence(>=6)"
+    ],
+    "k": 5,
+    "limit": 0,
+    "majority_class_floor_accuracy": 0.7142857142857143,
+    "min_readable_cell": 10,
+    "null_trials": 200,
+    "primary_metric": "f1_positive_class",
+    "repos": "all"
+  }
+}
