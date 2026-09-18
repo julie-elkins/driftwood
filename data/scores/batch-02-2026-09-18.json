@@ -1,0 +1,88 @@
+{
+  "labels_file": "data/labels-v5.jsonl",
+  "sheets": [
+    "review/shape-A-batch-02.md",
+    "review/shape-B-batch-02.md"
+  ],
+  "reviewed": 45,
+  "skipped_unlabelled": [],
+  "skipped_not_in_label_file": [],
+  "overall": {
+    "n": 45,
+    "drift": 14,
+    "precision": 0.3111,
+    "ci95": [
+      0.1953,
+      0.4567
+    ],
+    "verdicts": {
+      "cosmetic": 15,
+      "drift": 14,
+      "new": 8,
+      "unclear": 5,
+      "unrelated": 3
+    }
+  },
+  "by_shape": {
+    "A": {
+      "n": 25,
+      "drift": 7,
+      "precision": 0.28,
+      "ci95": [
+        0.1428,
+        0.4758
+      ],
+      "verdicts": {
+        "new": 8,
+        "cosmetic": 7,
+        "drift": 7,
+        "unrelated": 3
+      }
+    },
+    "B": {
+      "n": 20,
+      "drift": 7,
+      "precision": 0.35,
+      "ci95": [
+        0.1812,
+        0.5671
+      ],
+      "verdicts": {
+        "cosmetic": 8,
+        "drift": 7,
+        "unclear": 5
+      }
+    }
+  },
+  "by_basis": {
+    "doc_and_code_both_modified_sharing_identifier": {
+      "n": 25,
+      "drift": 7,
+      "precision": 0.28,
+      "ci95": [
+        0.1428,
+        0.4758
+      ],
+      "verdicts": {
+        "new": 8,
+        "cosmetic": 7,
+        "drift": 7,
+        "unrelated": 3
+      }
+    },
+    "doc_only_commit_modified_existing_prose": {
+      "n": 20,
+      "drift": 7,
+      "precision": 0.35,
+      "ci95": [
+        0.1812,
+        0.5671
+      ],
+      "verdicts": {
+        "cosmetic": 8,
+        "drift": 7,
+        "unclear": 5
+      }
+    }
+  }
+}

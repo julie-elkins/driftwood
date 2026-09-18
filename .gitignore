@@ -1,0 +1,34 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Cloned corpus repos. Reproducible from the slugs in the manifests, and far too
+# large to version (543MB for five repos).
+.cache/
+
+# Mined label sets from v2 onward. These are *derived* data: the deterministic
+# output of (repo shas, commit window, MineConfig, code version), and one day of
+# iteration produced seven of them totalling 16MB. What gets versioned instead is
+# the provenance -- `data/*.manifest.json` records every input plus a sha256 of
+# the output, and its `replay` field regenerates the file byte-identically. That
+# was verified, not assumed, before this rule was added.
+#
+# `data/labels.jsonl` (v1) is deliberately NOT ignored. It predates manifests, so
+# it is the one label set that cannot be regenerated, and the hand-labelled
+# verdicts in review/ join to it by `example_id`. Losing it would make the
+# ground-truth sheets unattributable.
+data/labels-v*.jsonl
+
+# Never ignored, and worth saying why:
+#   review/*.md              -- the hand labels. Irreplaceable; every number
+#                               downstream is measured against them.
+#   data/scores/*.json       -- the measurement history. A result is data, not
+#                               console output.
+#   data/*.manifest.json     -- what makes the ignored files above regenerable.

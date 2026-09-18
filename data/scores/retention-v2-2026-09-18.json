@@ -1,0 +1,91 @@
+{
+  "old_labels": "data/labels.jsonl",
+  "new_labels": "data/labels-v2.jsonl",
+  "corpus_size": {
+    "before": 1089,
+    "after": 791
+  },
+  "blended": {
+    "kept": {
+      "cosmetic": 12,
+      "unclear": 8,
+      "drift": 4
+    },
+    "dropped": {
+      "cosmetic": 13,
+      "drift": 2,
+      "unrelated": 1
+    },
+    "retained_n": 24,
+    "retained_drift": 4,
+    "precision": 0.1667,
+    "ci95": [
+      0.0668,
+      0.3585
+    ],
+    "positives_kept": "4/6"
+  },
+  "by_shape": {
+    "A": {
+      "kept": {
+        "drift": 4
+      },
+      "dropped": {
+        "cosmetic": 13,
+        "drift": 2,
+        "unrelated": 1
+      },
+      "retained_n": 4,
+      "retained_drift": 4,
+      "precision": 1.0,
+      "ci95": [
+        0.5101,
+        1.0
+      ],
+      "positives_kept": "4/6"
+    },
+    "B": {
+      "kept": {
+        "cosmetic": 12,
+        "unclear": 8
+      },
+      "dropped": {},
+      "retained_n": 20,
+      "retained_drift": 0,
+      "precision": 0.0,
+      "ci95": [
+        0.0,
+        0.1611
+      ],
+      "positives_kept": null
+    }
+  },
+  "lost_positives": [
+    {
+      "example_id": "d0f54d7f2b930191",
+      "repo": "psf/requests",
+      "shape": "A",
+      "doc_path": "docs/index.rst",
+      "code_path": "setup.py",
+      "fix_sha": "58cea7a7282999adafdc19a4e82e2d09207ab568",
+      "parent_sha": "9439fad03848d882f68710fdb3d69eaf02ef21ca",
+      "subject": "Drop support for CPython 3.7",
+      "shared_identifiers": [
+        "python"
+      ]
+    },
+    {
+      "example_id": "65463185f227a96c",
+      "repo": "psf/requests",
+      "shape": "A",
+      "doc_path": "README.md",
+      "code_path": "setup.py",
+      "fix_sha": "2edca11103c1c27dd8b572dab544b7f48cf3b446",
+      "parent_sha": "fec96cd5976ad763e45bac9a033d62cca1877a00",
+      "subject": "Add support for Python 3.14 and drop support for Python 3.8 (#6993)",
+      "shared_identifiers": [
+        "python"
+      ]
+    }
+  ]
+}

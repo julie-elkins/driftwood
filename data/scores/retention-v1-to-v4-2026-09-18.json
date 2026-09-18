@@ -1,0 +1,69 @@
+{
+  "old_labels": "data/labels.jsonl",
+  "new_labels": "data/labels-v4-requests-full.jsonl",
+  "corpus_size": {
+    "before": 1089,
+    "after": 871
+  },
+  "verdicts_read": 40,
+  "verdicts_scored": 40,
+  "not_in_old_labels": [],
+  "blended": {
+    "kept": {
+      "unclear": 7,
+      "drift": 6,
+      "cosmetic": 2
+    },
+    "dropped": {
+      "cosmetic": 23,
+      "unrelated": 1,
+      "unclear": 1
+    },
+    "retained_n": 15,
+    "retained_drift": 6,
+    "precision": 0.4,
+    "ci95": [
+      0.1982,
+      0.6425
+    ],
+    "positives_kept": "6/6"
+  },
+  "by_shape": {
+    "A": {
+      "kept": {
+        "drift": 6
+      },
+      "dropped": {
+        "cosmetic": 13,
+        "unrelated": 1
+      },
+      "retained_n": 6,
+      "retained_drift": 6,
+      "precision": 1.0,
+      "ci95": [
+        0.6097,
+        1.0
+      ],
+      "positives_kept": "6/6"
+    },
+    "B": {
+      "kept": {
+        "unclear": 7,
+        "cosmetic": 2
+      },
+      "dropped": {
+        "cosmetic": 10,
+        "unclear": 1
+      },
+      "retained_n": 9,
+      "retained_drift": 0,
+      "precision": 0.0,
+      "ci95": [
+        0.0,
+        0.2992
+      ],
+      "positives_kept": null
+    }
+  },
+  "lost_positives": []
+}

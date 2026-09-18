@@ -1,0 +1,22 @@
+[project]
+name = "driftwood"
+version = "0.1.0"
+description = "Finds documentation that has quietly stopped being true, and measures how well it did."
+readme = "README.md"
+authors = [
+    { name = "Julie Elkins" }
+]
+requires-python = ">=3.12"
+dependencies = []
+
+[project.scripts]
+driftwood = "driftwood.mining.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.11.8,<0.12.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
