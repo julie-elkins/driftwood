@@ -854,6 +854,37 @@ the prompt and the model, not on the case id. Temperature 0 is not determinism, 
 what makes a re-run reproducible — but only if editing the prompt invalidates it. Keyed on the
 case id, a prompt change would have appeared to have no effect.
 
+### The corpus was not reproducible from this repository
+
+Found by running the suite in a detached `git worktree` at HEAD instead of in the working tree.
+Four failures, all of them the tests that pin the real corpus.
+
+**79 of the 125 hand-written verdicts join to records that exist only in `data/labels-v3.jsonl`
+and `data/labels-v10.jsonl`, and `data/labels-v*.jsonl` is gitignored as derived data.** A clean
+checkout rebuilt 46 cases, reported 7 positives instead of 30, computed a different majority-class
+floor, and raised nothing — one warning, and then every number correct against a corpus two thirds
+smaller than the one described three sections above.
+
+The tests that pin 125 / 105 / 30 had been passing all along. They were reading this machine's
+`data/` directory, which has every mined version. **A test that reads the repository's own data
+directory verifies the developer's disk, not the repository.**
+
+The gitignore already contained the argument and it had not been applied. `data/labels.jsonl` is
+tracked because "the hand-labelled verdicts in `review/` join to it by `example_id`. Losing it
+would make the ground-truth sheets unattributable." That is true of v3 and v10 for 79 cases.
+
+The fix is `data/judged-records.jsonl`: the 125 records the hand labels actually join to, written
+by `driftwood judge-freeze` and tracked. Derived data committed anyway, on the same grounds v1 is —
+regenerable *in principle* is not the same as present. Three details are deliberate:
+
+- **Frozen is the preferred source even where the live versions survive**, so `resolved_from` is
+  identical on every machine. Otherwise the provenance block in the results JSON differs by
+  checkout, and two people comparing results are comparing their checkouts.
+- **The live versions are still read**, and one disagreeing with a frozen record is reported: that
+  is what a stale freeze looks like.
+- **Each record keeps a `frozen_from`** naming the mining run that produced it. That is the field
+  needed to explain a case, and it is exactly what a naive concatenation drops.
+
 ## Roadmap
 
 | stage | state |
@@ -921,6 +952,14 @@ key, which is the half of the result that makes the other half readable:
 uv run driftwood judge-cases
 uv run driftwood judge-eval --arms oracle retrieved --out data/scores/judge-floors.json
 uv run driftwood judge-eval --dump-prompt
+```
+
+`judge-cases` warns if any case resolves only from a gitignored label version, which means the
+tracked join table is stale and a clean checkout would silently score a smaller corpus. Rewrite it
+from a machine that still holds the mined versions:
+
+```
+uv run driftwood judge-freeze
 ```
 
 `--dump-prompt` prints one rendered prompt so a person can check by eye that no diff, no commit
