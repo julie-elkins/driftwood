@@ -14,9 +14,11 @@ import pytest
 
 from driftwood.judge.cases import (
     FALSE_AT_PARENT,
+    FROZEN_NAME,
     JudgeCase,
     class_balance,
     format_case_report,
+    freeze_records,
     load_cases,
     parse_verdicts,
 )
@@ -167,8 +169,8 @@ class TestResolvingAgainstTheMinedRecords:
         assert tally["unresolvable"] == 1
 
     def test_every_label_version_is_searched(self, corpus):
-        # Three of the real 125 exist only in v3/v4/v5, having been filtered out of
-        # every later version. Reading one file finds 122 and looks complete.
+        # 79 of the real 125 exist only in gitignored versions, having been filtered
+        # out of `labels.jsonl`. Reading one file finds 46 and prints a warning.
         review, data = corpus
         (review / "b.md").write_text(_sheet(("aaa1", "drift"), ("old1", "cosmetic")))
         (data / "labels.jsonl").write_text(json.dumps(_record("aaa1")) + "\n")
@@ -300,6 +302,87 @@ def real():
     if not (data / "labels.jsonl").exists():
         pytest.skip("mined labels not present")
     return load_cases(REPO_ROOT / "review", data)
+
+
+class TestTheCorpusIsSelfContained:
+    """The test that was missing, and the bug it would have caught.
+
+    79 of the 125 verdicts joined only to `labels-v3` and `labels-v10`, both
+    gitignored as derived data. A clean checkout rebuilt 46 cases, reported a
+    different class balance and a different floor, and raised nothing -- it printed one
+    warning and then computed every number correctly against the wrong corpus. The
+    machine that wrote the pre-registration could not see it, because that machine had
+    all the versions.
+    """
+
+    def test_the_frozen_file_alone_rebuilds_every_case(self, tmp_path):
+        source = REPO_ROOT / "data" / FROZEN_NAME
+        if not source.exists():
+            pytest.skip("frozen join table not present")
+        lonely = tmp_path / "data"
+        lonely.mkdir()
+        (lonely / FROZEN_NAME).write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+
+        cases, tally = load_cases(REPO_ROOT / "review", lonely)
+
+        assert tally["verdicts"] == 125
+        assert tally["cases"] == 125, (
+            "a checkout with only the tracked files must rebuild the whole corpus"
+        )
+        assert tally.get("unresolvable", 0) == 0
+        assert class_balance(cases)["scoreable"] == 105
+
+    def test_the_frozen_file_is_the_preferred_source_everywhere(self, real):
+        # So `resolved_from` is identical on a machine holding every mined version and
+        # on a clean checkout holding none. Otherwise the provenance block in the
+        # results JSON differs by machine, and two people comparing results are
+        # comparing their checkouts.
+        cases, tally = real
+        if not (REPO_ROOT / "data" / FROZEN_NAME).exists():
+            pytest.skip("frozen join table not present")
+        assert {c.resolved_from for c in cases} == {FROZEN_NAME}
+        assert tally["from_ignored_versions"] == 0
+
+    def test_each_frozen_record_remembers_which_mine_produced_it(self):
+        path = REPO_ROOT / "data" / FROZEN_NAME
+        if not path.exists():
+            pytest.skip("frozen join table not present")
+        sources = {
+            json.loads(line)["frozen_from"]
+            for line in path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        }
+        # Freezing must not erase provenance: which mining run produced a case is the
+        # field needed to explain it, and a naive concatenation drops exactly that.
+        assert sources == {"labels.jsonl", "labels-v3.jsonl", "labels-v10.jsonl"}
+
+    def test_freezing_is_idempotent(self, tmp_path):
+        source = REPO_ROOT / "data" / FROZEN_NAME
+        if not source.exists():
+            pytest.skip("frozen join table not present")
+        data = tmp_path / "data"
+        data.mkdir()
+        (data / FROZEN_NAME).write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+        out = tmp_path / "again.jsonl"
+
+        written, unresolvable = freeze_records(REPO_ROOT / "review", data, out)
+
+        assert (written, unresolvable) == (125, 0)
+        assert out.read_text(encoding="utf-8") == source.read_text(encoding="utf-8")
+
+    def test_a_verdict_resolving_nowhere_is_reported_as_a_failure(self, tmp_path):
+        # A freeze that quietly omits a case is worse than no freeze: it would make
+        # the gap permanent and invisible on every machine.
+        review = tmp_path / "review"
+        data = tmp_path / "data"
+        review.mkdir()
+        data.mkdir()
+        (review / "b.md").write_text(_sheet(("aaa1", "drift"), ("ghost", "cosmetic")))
+        (data / "labels.jsonl").write_text(json.dumps(_record("aaa1")) + "\n")
+
+        written, unresolvable = freeze_records(review, data, tmp_path / "out.jsonl")
+
+        assert (written, unresolvable) == (1, 1)
 
 
 class TestAgainstTheRealCorpus:

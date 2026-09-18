@@ -14,9 +14,20 @@ picked.** Mining is deterministic, so a case present in v3 and v5 should carry
 identical fields; if it does not, something about the corpus moved and a silent
 choice of version would bury it. Disagreements are counted and reported.
 
-**A verdict with no record is dropped and counted, never dropped quietly.** Three
-of the 125 resolve only from v3/v4/v5, having been filtered out of every later
-version -- so searching one file finds 122 and looks complete.
+**A verdict with no record is dropped and counted, never dropped quietly.** This is
+not hypothetical. 79 of the 125 verdicts join to records that live only in
+`labels-v3` and `labels-v10`, both of which are *gitignored* as derived data. A clean
+checkout of this repository therefore rebuilds 46 cases, not 125, and reports a
+different class balance and a different floor with nothing raising -- it prints a
+warning and then computes every number correctly against the wrong corpus.
+
+`data/judged-records.jsonl` is the fix: the 125 records the hand labels actually join
+to, frozen and tracked, written by `driftwood judge-freeze`. It is derived data that
+gets versioned anyway, for the same reason `data/labels.jsonl` is -- it is what makes
+irreplaceable hand labels attributable, and regenerable-in-principle is not the same
+as present. When it exists it is the preferred source, so `resolved_from` is the same
+on every machine; live label versions are still read, and a live version that
+disagrees with the frozen record means the freeze is stale.
 """
 
 from __future__ import annotations
@@ -29,15 +40,22 @@ from pathlib import Path
 
 __all__ = [
     "FALSE_AT_PARENT",
+    "FROZEN_NAME",
     "JudgeCase",
     "VERDICTS",
     "class_balance",
     "format_case_report",
+    "freeze_records",
     "load_cases",
     "parse_verdicts",
 ]
 
 VERDICTS = ("drift", "new", "cosmetic", "unrelated", "unclear")
+
+# The tracked join table. Named here rather than passed in, because a caller free to
+# point this somewhere else is a caller free to run the eval against a corpus nobody
+# else has -- and the whole point of the file is that everyone has the same one.
+FROZEN_NAME = "judged-records.jsonl"
 
 # The prospective target, and the reason the five classes collapse to two.
 #
@@ -133,15 +151,19 @@ def parse_verdicts(text: str) -> dict[str, str]:
 
 
 def _index_label_files(data_dir: Path) -> tuple[dict[str, dict[str, dict]], list[str]]:
-    """`{example_id: {filename: record}}` over every mined label file on disk.
+    """`{example_id: {filename: record}}` over the frozen file and every label file.
 
     Every version is read rather than the newest, because the labelled cases were
-    drawn from several: three of the 125 exist only in v3/v4/v5, having been removed
-    by a later filter. Resolving against one file would silently return 122.
+    drawn from several: 79 of the 125 come from v10 and three from v3, both of which
+    a later filter removed. Resolving against `labels.jsonl` alone returns 46.
     """
     index: dict[str, dict[str, dict]] = {}
     names: list[str] = []
-    for path in sorted(data_dir.glob("labels*.jsonl")):
+    sources = sorted(data_dir.glob("labels*.jsonl"))
+    frozen = data_dir / FROZEN_NAME
+    if frozen.exists():
+        sources.append(frozen)
+    for path in sources:
         names.append(path.name)
         with path.open(encoding="utf-8") as handle:
             for line in handle:
@@ -152,15 +174,11 @@ def _index_label_files(data_dir: Path) -> tuple[dict[str, dict[str, dict]], list
     return index, names
 
 
-def load_cases(
-    review_dir: Path, data_dir: Path
-) -> tuple[list[JudgeCase], dict[str, int]]:
-    """Every labelled case, plus a tally of what did not make it.
-
-    The tally is returned rather than logged because each of its counts is a way the
-    eval could be quietly wrong about its own denominator.
-    """
-    tally = Counter()
+def _verdicts_from_sheets(
+    review_dir: Path,
+) -> tuple[dict[str, tuple[str, str]], Counter]:
+    """`{example_id: (verdict, sheet)}` across every sheet, plus a tally."""
+    tally: Counter = Counter()
     verdicts: dict[str, tuple[str, str]] = {}
     for sheet in sorted(review_dir.glob("*.md")):
         found = parse_verdicts(sheet.read_text(encoding="utf-8"))
@@ -174,6 +192,18 @@ def load_cases(
                 continue
             verdicts[example_id] = (verdict, sheet.name)
     tally["verdicts"] = len(verdicts)
+    return verdicts, tally
+
+
+def load_cases(
+    review_dir: Path, data_dir: Path
+) -> tuple[list[JudgeCase], dict[str, int]]:
+    """Every labelled case, plus a tally of what did not make it.
+
+    The tally is returned rather than logged because each of its counts is a way the
+    eval could be quietly wrong about its own denominator.
+    """
+    verdicts, tally = _verdicts_from_sheets(review_dir)
 
     index, _ = _index_label_files(data_dir)
     cases: list[JudgeCase] = []
@@ -183,11 +213,17 @@ def load_cases(
             tally["unresolvable"] += 1
             continue
 
-        # Prefer the tracked v1 file when it has the case, then ascending versions.
-        # The choice barely matters given the agreement check below, but it has to
-        # be deterministic: a dict-order-dependent pick would make the provenance
-        # block in the results JSON differ between runs on identical inputs.
-        preferred = "labels.jsonl" if "labels.jsonl" in found else sorted(found)[0]
+        # The frozen file first, then the tracked v1 file, then ascending versions.
+        # Frozen wins so that `resolved_from` is identical on a machine that still has
+        # every mined version and on a clean checkout that has none of them --
+        # otherwise the provenance block in the results JSON differs by machine, and
+        # two people comparing results would be comparing their checkouts.
+        if FROZEN_NAME in found:
+            preferred = FROZEN_NAME
+        elif "labels.jsonl" in found:
+            preferred = "labels.jsonl"
+        else:
+            preferred = sorted(found)[0]
         record = found[preferred]
 
         if len(found) > 1:
@@ -217,10 +253,54 @@ def load_cases(
             )
         )
     tally["cases"] = len(cases)
+    # How many cases a clean checkout could rebuild. Reported because the answer was
+    # 46 of 125 before the frozen file existed, and the only symptom was a warning
+    # nobody had a reason to read: every other number computed fine, against a corpus
+    # two thirds smaller than the one the pre-registration describes.
+    tally["from_frozen"] = sum(1 for c in cases if c.resolved_from == FROZEN_NAME)
+    tally["from_ignored_versions"] = sum(
+        1
+        for c in cases
+        if c.resolved_from not in (FROZEN_NAME, "labels.jsonl")
+    )
     tally["scoreable"] = sum(1 for c in cases if c.scoreable)
     tally["held_out_unclear"] = sum(1 for c in cases if c.verdict == "unclear")
     tally["with_code_path"] = sum(1 for c in cases if c.code_path)
     return cases, dict(tally)
+
+
+def freeze_records(review_dir: Path, data_dir: Path, out: Path) -> tuple[int, int]:
+    """Write the records the hand labels join to, as a tracked file.
+
+    Returns `(written, unresolvable)`. Run on a machine that still has the mined
+    versions; the output is what a clean checkout resolves against.
+
+    Each record keeps a `frozen_from` naming the file it came from, so the freeze
+    does not erase which mining run produced a case -- that is the field that would
+    be needed to explain a case, and it is the one a naive concatenation drops.
+    """
+    verdicts = _verdicts_from_sheets(review_dir)[0]
+    index, _ = _index_label_files(data_dir)
+    written = 0
+    unresolvable = 0
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with out.open("w", encoding="utf-8") as handle:
+        for example_id in sorted(verdicts):
+            found = index.get(example_id)
+            if not found:
+                unresolvable += 1
+                continue
+            source = (
+                "labels.jsonl" if "labels.jsonl" in found
+                else next(n for n in sorted(found) if n != FROZEN_NAME)
+                if any(n != FROZEN_NAME for n in found)
+                else FROZEN_NAME
+            )
+            record = dict(found[source])
+            record["frozen_from"] = record.get("frozen_from", source)
+            handle.write(json.dumps(record, sort_keys=True) + "\n")
+            written += 1
+    return written, unresolvable
 
 
 def class_balance(cases: list[JudgeCase]) -> dict[str, float | int]:
@@ -267,6 +347,12 @@ def format_case_report(cases: list[JudgeCase], tally: dict[str, int]) -> str:
         lines.append(
             f"  WARNING: {tally['duplicate_verdicts']} case(s) judged in two sheets; "
             "the later sheet was ignored rather than merged"
+        )
+    if tally.get("from_ignored_versions"):
+        lines.append(
+            f"  WARNING: {tally['from_ignored_versions']} case(s) resolved only from a "
+            f"gitignored label version -- run `driftwood judge-freeze` so a clean "
+            "checkout rebuilds the same corpus"
         )
     lines.append("")
 

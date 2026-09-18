@@ -17,7 +17,13 @@ import sys
 from pathlib import Path
 
 from . import DEFAULT_JUDGE_MODEL
-from .cases import class_balance, format_case_report, load_cases
+from .cases import (
+    FROZEN_NAME,
+    class_balance,
+    format_case_report,
+    freeze_records,
+    load_cases,
+)
 from .context import ARMS, DEFAULT_K, ContextBuilder, render
 from .evaluate import dump_json, format_results, noise_range, to_json
 from .judge import AlwaysJudge, AnthropicJudge, LexicalJudge
@@ -33,6 +39,21 @@ FREE_JUDGES = ("always-not-false", "always-false", "lexical-absence")
 def _cmd_cases(args: argparse.Namespace) -> int:
     cases, tally = load_cases(args.review, args.data)
     print(format_case_report(cases, tally))
+    return 0
+
+
+def _cmd_freeze(args: argparse.Namespace) -> int:
+    out = args.out or (args.data / FROZEN_NAME)
+    written, unresolvable = freeze_records(args.review, args.data, out)
+    print(f"wrote {written} record(s) to {out}")
+    if unresolvable:
+        print(
+            f"WARNING: {unresolvable} verdict(s) resolved against nothing on this "
+            "machine and are NOT in the freeze -- they will be missing from every "
+            "checkout, including this one",
+            file=sys.stderr,
+        )
+        return 1
     return 0
 
 
@@ -181,6 +202,15 @@ def add_parser(subparsers) -> None:
     cases.add_argument("--review", type=Path, default=Path("review"))
     cases.add_argument("--data", type=Path, default=Path("data"))
     cases.set_defaults(func=_cmd_cases)
+
+    freeze = subparsers.add_parser(
+        "judge-freeze",
+        help="write the tracked join table so a clean checkout rebuilds the same corpus",
+    )
+    freeze.add_argument("--review", type=Path, default=Path("review"))
+    freeze.add_argument("--data", type=Path, default=Path("data"))
+    freeze.add_argument("--out", type=Path, default=None)
+    freeze.set_defaults(func=_cmd_freeze)
 
     ev = subparsers.add_parser(
         "judge-eval", help="score judges against the hand-written verdicts"
