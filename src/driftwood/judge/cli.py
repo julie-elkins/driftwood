@@ -25,8 +25,22 @@ from .cases import (
     load_cases,
 )
 from .context import ARMS, DEFAULT_K, ContextBuilder, render
-from .evaluate import dump_json, format_results, noise_range, to_json
-from .judge import AlwaysJudge, AnthropicJudge, LexicalJudge
+from .evaluate import (
+    dump_json,
+    estimate_spend,
+    format_results,
+    format_spend,
+    measured_spend,
+    noise_range,
+    to_json,
+)
+from .judge import (
+    DEFAULT_MAX_TOKENS,
+    SYSTEM_PROMPT,
+    AlwaysJudge,
+    AnthropicJudge,
+    LexicalJudge,
+)
 
 __all__ = ["add_parser"]
 
@@ -89,7 +103,7 @@ def _build_judges(args: argparse.Namespace) -> dict[str, object]:
             judges[judge.name] = judge
     if "model" in wanted:
         judges[f"model:{args.model}"] = AnthropicJudge(
-            model=args.model, cache_dir=args.cache
+            model=args.model, cache_dir=args.cache, max_tokens=args.max_tokens
         )
     return judges
 
@@ -171,12 +185,45 @@ def _cmd_eval(args: argparse.Namespace) -> int:
             print(render(first))
             print("--- end ---\n")
 
+        # Priced before anything is sent, and only when something is about to be paid
+        # for. Measured off the prompts that were actually built, so a mis-set --k or a
+        # forgotten --limit shows up as a number here rather than on a bill.
+        paid = [name for name in judges if name.startswith("model:")]
+        estimate = None
+        if paid:
+            estimate = estimate_spend(
+                [render(c) for c in contexts.values()],
+                system=SYSTEM_PROMPT,
+                max_tokens=args.max_tokens,
+            )
+            print(f"arm {arm}: {', '.join(paid)} will be charged for")
+            print(format_spend(estimate))
+            if args.max_input_tokens and (
+                estimate["input_tokens_approx"] > args.max_input_tokens
+            ):
+                # Denominated in tokens rather than dollars for the same reason the
+                # report is: a token budget cannot go stale.
+                print(
+                    f"  REFUSING: estimated {estimate['input_tokens_approx']:,} input "
+                    f"tokens exceeds --max-input-tokens {args.max_input_tokens:,}. "
+                    "Nothing was sent.",
+                    file=sys.stderr,
+                )
+                return 1
+            print()
+
         judgements: dict[str, dict] = {}
         for name, judge in judges.items():
             judgements[name] = {
                 example_id: judge.judge(context)  # type: ignore[attr-defined]
                 for example_id, context in contexts.items()
             }
+
+        if estimate is not None:
+            for name in paid:
+                print(f"arm {arm}: {name}")
+                print(format_spend(estimate, measured_spend(judgements[name])))
+            print()
 
         scored = [c for c in arm_cases if c.example_id in contexts]
         noise[arm] = noise_range(scored, set(contexts), trials=args.null_trials)
@@ -257,6 +304,16 @@ def add_parser(subparsers) -> None:
         "--k", type=int, default=DEFAULT_K,
         help="code files shown per document; 5 is where the measured hit rate on the "
              "45 known-answer cases reaches 60%%, and it is a dimension to sweep",
+    )
+    ev.add_argument(
+        "--max-tokens", type=int, default=DEFAULT_MAX_TOKENS,
+        help="reply budget per case; the spend estimate multiplies by it",
+    )
+    ev.add_argument(
+        "--max-input-tokens", type=int, default=0,
+        help="refuse to send an arm whose estimated input exceeds this, before any "
+             "call is made; 0 disables. Denominated in tokens because a token budget "
+             "cannot go stale the way a dollar figure can",
     )
     ev.add_argument("--repos", nargs="*", default=None)
     ev.add_argument("--limit", type=int, default=0, help="smoke test only")

@@ -38,11 +38,15 @@ from .cases import JudgeCase, class_balance
 from .judge import Judgement, PriorJudge
 
 __all__ = [
+    "CHARS_PER_TOKEN",
     "MIN_CELL",
     "NULL_TRIALS",
     "Scores",
     "confusion",
+    "estimate_spend",
     "format_results",
+    "format_spend",
+    "measured_spend",
     "noise_range",
     "score",
     "to_json",
@@ -56,6 +60,100 @@ NULL_TRIALS = 200
 # is not principled; it is the point at which one case moves F1 by more than the
 # largest effect stage 3 is looking for.
 MIN_CELL = 10
+
+# Characters per token, for estimating a run's size before paying for it. A heuristic
+# and labelled as one everywhere it surfaces: the true count depends on a tokeniser
+# this package does not ship, and these prompts are source code and reStructuredText
+# rather than English, which tokenises worse than the usual 4.0 rule of thumb.
+#
+# The estimate is deliberately reported in TOKENS and not in dollars. A price is a
+# claim about the world that goes stale silently and would sit in this file being wrong
+# -- which is the failure mode the whole project is about, so hardcoding a rate here
+# would be embarrassing. Token counts are a measurement of the prompts on disk.
+CHARS_PER_TOKEN = 3.6
+
+
+def estimate_spend(
+    rendered: list[str], *, system: str, max_tokens: int
+) -> dict[str, int | float]:
+    """What an arm will cost, in tokens, from the prompts actually built.
+
+    Measured from the rendered strings rather than from the case count, because the
+    two differ by 20x here: a doc at the character budget is a 45,000-character prompt
+    and a one-line README is not.
+
+    `system` is required rather than defaulting to empty, and that is the whole reason
+    it is keyword-only. The first version of this function omitted it and under-read
+    the oracle arm by 11% -- the system prompt is 1,395 characters resent on every one
+    of the 45 calls. An estimate wrong in the cheap-looking direction is worse than no
+    estimate, so the signature refuses to let a caller forget it.
+
+    `output_tokens_high` is `max_tokens` per case -- an upper bound, not a guess.
+    Replies are a few hundred tokens of JSON in practice, so a run that approaches this
+    bound is one where the model is not answering in the requested shape.
+    """
+    per_call_overhead = len(system)
+    chars = sum(len(text) + per_call_overhead for text in rendered)
+    return {
+        "calls": len(rendered),
+        "input_chars": chars,
+        "system_chars_per_call": per_call_overhead,
+        "input_tokens_approx": round(chars / CHARS_PER_TOKEN),
+        "output_tokens_high": len(rendered) * max_tokens,
+        "longest_prompt_chars": max((len(t) + per_call_overhead for t in rendered), default=0),
+    }
+
+
+def measured_spend(judgements: dict[str, Judgement]) -> dict[str, int]:
+    """What the provider said it billed, summed over the judgements that know.
+
+    `unknown` counts judgements with no usage attached -- free judges, and replies
+    cached before usage was recorded. Reported rather than folded into zero, because a
+    zero would make a fully cached run look free instead of looking unmeasured.
+    """
+    known = [j for j in judgements.values() if j.input_tokens is not None]
+    return {
+        "calls_measured": len(known),
+        "unknown": len(judgements) - len(known),
+        "input_tokens": sum(j.input_tokens or 0 for j in known),
+        "output_tokens": sum(j.output_tokens or 0 for j in known),
+        "cached": sum(1 for j in judgements.values() if j.cached),
+    }
+
+
+def format_spend(
+    estimate: dict[str, int | float], measured: dict[str, int] | None = None
+) -> str:
+    """The estimate, and -- once a run has happened -- how wrong it was."""
+    lines = [
+        f"{estimate['calls']} call(s) at most: ~{estimate['input_tokens_approx']:,} input "
+        f"tokens (approx, {CHARS_PER_TOKEN} chars/token over "
+        f"{estimate['input_chars']:,} characters, including the "
+        f"{estimate['system_chars_per_call']:,}-character system prompt resent every call),",
+        f"  up to {estimate['output_tokens_high']:,} output tokens; longest single "
+        f"prompt {estimate['longest_prompt_chars']:,} characters.",
+        "  Reported in tokens, not dollars: a hardcoded price is exactly the kind of "
+        "stale claim this tool looks for.",
+    ]
+    if not measured or not measured["calls_measured"]:
+        return "\n".join(lines)
+
+    actual = measured["input_tokens"]
+    approx = estimate["input_tokens_approx"]
+    lines.append(
+        f"  billed: {actual:,} input + {measured['output_tokens']:,} output tokens over "
+        f"{measured['calls_measured']} call(s)"
+        + (f", {measured['unknown']} with no usage recorded" if measured["unknown"] else "")
+        + (f", {measured['cached']} served from cache" if measured["cached"] else "")
+    )
+    if approx:
+        # The estimate checked against the outcome. An estimate nobody ever compares to
+        # the bill is not an estimate, it is a reassurance.
+        lines.append(
+            f"  the {CHARS_PER_TOKEN} chars/token heuristic was off by "
+            f"{(approx - actual) / actual:+.1%} on this arm"
+        )
+    return "\n".join(lines)
 
 
 @dataclass(frozen=True)

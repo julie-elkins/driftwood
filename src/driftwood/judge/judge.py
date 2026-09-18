@@ -45,6 +45,7 @@ from . import DEFAULT_JUDGE_MODEL
 from .context import JudgeContext, context_hash, render
 
 __all__ = [
+    "DEFAULT_MAX_TOKENS",
     "AlwaysJudge",
     "AnthropicJudge",
     "Judge",
@@ -53,6 +54,11 @@ __all__ = [
     "PriorJudge",
     "SYSTEM_PROMPT",
 ]
+
+# A verdict plus a quoted claim and two sentences of reason. Named rather than inline
+# because the spend estimate multiplies by it, and the two drifting apart would make
+# the estimate quietly wrong in the safe-looking direction.
+DEFAULT_MAX_TOKENS = 700
 
 # The prompt is part of the experiment, so it is versioned with the code and hashed
 # into the cache key. Three things in it are load-bearing:
@@ -124,6 +130,11 @@ class Judgement:
     # becoming "not-false" would earn free credit on 75 of 105 cases.
     unparsed: bool = False
     cached: bool = False
+    # What the provider said it billed, when there was a provider. None for the free
+    # judges, and None for a reply cached before this field existed. Kept so the
+    # pre-run estimate can be checked against the outcome rather than believed.
+    input_tokens: int | None = None
+    output_tokens: int | None = None
 
     @property
     def abstained(self) -> bool:
@@ -264,7 +275,7 @@ class AnthropicJudge:
         *,
         model: str = DEFAULT_JUDGE_MODEL,
         cache_dir: Path | None = None,
-        max_tokens: int = 700,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
         system: str = SYSTEM_PROMPT,
         client=None,
     ) -> None:
@@ -295,7 +306,19 @@ class AnthropicJudge:
                     "floors, which is the half of the result that does not cost money, "
                     "and the half that makes the other half readable."
                 )
-            from anthropic import Anthropic  # imported late: optional dependency
+            try:
+                from anthropic import Anthropic  # imported late: optional dependency
+            except ImportError as exc:  # pragma: no cover - exercised via the message test
+                # A bare ModuleNotFoundError here is a dead end for the reader, and it
+                # arrives at the worst moment: key set, run started, nothing said about
+                # the one command that fixes it. The extra name is asserted against
+                # pyproject.toml in tests, so this cannot name an extra that does not
+                # exist -- the mistake the no-key message made with --judges floors.
+                raise RuntimeError(
+                    "the anthropic SDK is not installed. It is an optional extra, "
+                    "because the floors deliberately need neither it nor a key: run "
+                    "`uv sync --extra judge` and try again."
+                ) from exc
 
             self._client = Anthropic()
 
@@ -309,12 +332,18 @@ class AnthropicJudge:
         key = context_hash(context, self.system, self.model)
         path = self._cache_path(key)
         if path is not None and path.exists():
-            raw = json.loads(path.read_text(encoding="utf-8"))["text"]
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            raw = payload["text"]
             answer, claim, code, reason, unparsed = _parse(raw)
             return Judgement(
                 example_id=context.example_id, arm=context.arm, judge=self.name,
                 answer=answer, claim=claim, code=code, reason=reason,
                 unparsed=unparsed, cached=True,
+                # `.get`, because entries written before usage was recorded have no
+                # such key. Absent is reported as unknown, never as zero -- a missing
+                # count summed as zero would make a cached run look free.
+                input_tokens=payload.get("input_tokens"),
+                output_tokens=payload.get("output_tokens"),
             )
 
         response = self._client.messages.create(
@@ -327,16 +356,26 @@ class AnthropicJudge:
         raw = "".join(
             block.text for block in response.content if getattr(block, "type", "") == "text"
         )
+        usage = getattr(response, "usage", None)
+        billed_in = getattr(usage, "input_tokens", None)
+        billed_out = getattr(usage, "output_tokens", None)
         if path is not None:
             # Written before parsing, so a reply that will not parse is on disk to be
             # read by hand. An unparsed reply is the most informative failure here and
             # the easiest one to lose.
             path.write_text(
-                json.dumps({"key": key, "model": self.model, "text": raw}, indent=2),
+                json.dumps(
+                    {
+                        "key": key, "model": self.model, "text": raw,
+                        "input_tokens": billed_in, "output_tokens": billed_out,
+                    },
+                    indent=2,
+                ),
                 encoding="utf-8",
             )
         answer, claim, code, reason, unparsed = _parse(raw)
         return Judgement(
             example_id=context.example_id, arm=context.arm, judge=self.name,
             answer=answer, claim=claim, code=code, reason=reason, unparsed=unparsed,
+            input_tokens=billed_in, output_tokens=billed_out,
         )
