@@ -731,6 +731,129 @@ label set that predates manifests and therefore cannot be regenerated.
   plausible-looking pair *has* co-changed. So it is reported per repo and never pooled; pooling
   would rebuild round 1's single-repo confound in a new place.
 
+## Stage 3: the judge, and the free half of it that runs first
+
+The question the project is named after: shown a document and some code *at one commit*, does
+the document say something false about the code? 125 hand-written verdicts already exist across
+seven review sheets, so this stage is scored rather than demonstrated.
+
+Nothing has called a model yet, and that is the point of the ordering. Everything below runs with
+no key, no network and no `anthropic` installed, because a model's number is uninterpretable
+without it.
+
+### The five labels are not the target, and using them would have been silent
+
+The sheets ask for one of `drift`, `new`, `cosmetic`, `unrelated` or `unclear`. Three of those
+five are defined by the *correcting* commit, not by the state being judged — a judge that sees
+only the parent cannot separate "cosmetic" from "unrelated" even in principle, because both mean
+"nothing was false". So the space collapses to one binary: was this documentation false about the
+code at this commit?
+
+| label | n | prospective target |
+|---|---|---|
+| `drift` | 30 | **false at parent** |
+| `new` | 10 | not false |
+| `cosmetic` | 61 | not false |
+| `unrelated` | 4 | not false |
+| `unclear` | 20 | held out — abstention calibration, not a class |
+
+`new` is the trap, and I had it backwards. The legend reads "documenting something that did not
+exist yet", which sounds like a doc that ran ahead of its code — a positive. Reading two actual
+cases first: they are "Added support for signals", the feature and its documentation landing in
+one commit. At the parent neither existed, so nothing was false, and the miner proposing the pair
+is itself the false positive. Ten of 105 cases turn on that one constant, and a flipped label
+there would have penalised a judge for being right.
+
+`unclear` is held out rather than scored. Julie could not decide *with both diffs in front of
+her*; a judge working from strictly less has no defensible answer either. Those 20 become the
+calibration set for abstention instead.
+
+### Accuracy is near-useless here, so the floors are the result
+
+At a 28.6% positive rate, answering "not false" every single time scores **71.4% accuracy**. Any
+accuracy in the sixties or seventies is consistent with a judge that has learned nothing. So the
+primary metric is F1 on the positive class — where that same constant scores 0.00.
+
+But F1 has its own floor, and it is not zero. Answering "drift" every time scores **F1 0.44**.
+Both constants are reported on every table, because they catch opposite failures.
+
+Retrieved arm, k=5, 105 scoreable cases:
+
+| judge | F1 | precision | recall | accuracy |
+|---|---|---|---|---|
+| `always-not-false` — the majority floor | 0.00 | 0.00 | 0.00 | **71.4%** |
+| `always-false` — the F1 floor | **0.44** | 0.29 | 1.00 | 28.6% |
+| `lexical-absence(>=1)` | 0.45 | 0.30 | 0.97 | 33.3% |
+| `lexical-absence(>=3)` | 0.45 | 0.29 | 0.93 | 34.3% |
+| `lexical-absence(>=6)` | 0.42 | 0.29 | 0.80 | 38.1% |
+| *chance, 200 trials, p5–p95* | *0.18–0.39* | *0.19–0.40* | | *52–67%* |
+
+`lexical-absence` flags a document that marks up an identifier — backticked or fenced, never bare
+prose — which appears in none of the code files shown. It is the thing you would write in an
+afternoon without an LLM, and it is the comparison that actually matters. At its best threshold
+it beats a stuck switch by **one point of F1**, on a chance range 0.21 wide, and tightening the
+threshold makes it worse. Its confusion matrix says why: it answers "false" on 29 of 30 drift
+cases *and* 58 of 61 cosmetic ones. It is a constant with extra steps.
+
+Two claims this pre-empts, both of which I would otherwise have been able to make:
+
+- "Our judge beats a non-LLM baseline." The non-LLM baseline is not a baseline.
+- "Our judge scores F1 0.40." That is worse than a stuck switch, and against the accuracy floor
+  alone it would have read as a respectable result.
+
+### The retrieval ceiling, measured rather than assumed
+
+80 of the 125 cases are doc-only commits with **no code side at all**, so the code has to be
+retrieved and stage 2 is load-bearing here rather than an add-on. The other 45 carry the file the
+commit actually touched, which makes the retrieval ceiling a free measurement:
+
+| | hit@1 | hit@3 | hit@5 | hit@10 | hit@20 |
+|---|---|---|---|---|---|
+| commit's own code file, `lexical` rank | 20% | 38% | **60%** | 87% | 98% |
+
+Median rank 5; the file is present in the pool all 45 times. So the planned k=3 would have capped
+the arm near 38% on shape A before a judge read a word, and an oracle-vs-retrieved gap would
+mostly have been that cap. k=5 buys 22 points for two more files; k=10 buys 27 more but shows
+seven distractors, and this arm's job is an end-to-end number rather than the best number.
+
+Two arms, fixed before any model ran. **Oracle** (45 cases) hands over the commit's own file and
+isolates judging skill from retrieval quality — not a product configuration, since in production
+nobody hands you the file. **Retrieved** (all 125) is the only arm that covers shape B and the
+only end-to-end number. A third diff-shown arm exists as a diagnostic ceiling and must never be
+reported as product performance.
+
+### Two fields on every record are the answer
+
+The corpus was mined *from* the correcting commit, so the record describes that commit more than
+it describes the state being judged. Two fields give it away outright: `subject` is the fix's
+commit message, and this corpus contains subjects like "Fix the incorrect timeout default
+documented in the config guide". `shared_identifiers` is the doc diff's removed-only side — the
+identifiers the fix *deleted* from the prose, which is a pointer at the drifted sentence and is
+the miner's own selection evidence.
+
+Both were sitting on the dataclass the context builder reads. They are named in a
+`LEAKING_FIELDS` constant, `render` is the single path from a case to a model, and six tests
+assert on the rendered *string* rather than on the context object — a field can be excluded from
+the object and still be formatted into the prompt. Leakage of this kind does not fail a test
+suite. It produces an excellent F1.
+
+### Three things the harness refuses to do quietly
+
+- **An unparsed reply is an abstention, not a negative.** Defaulting a malformed reply to "not
+  false" would earn free credit on 75 of 105 cases. They are counted, warned about, and written
+  to disk *before* parsing so they can be read by hand.
+- **Abstentions are reported twice and folded into neither.** One accuracy column counts an
+  abstention wrong; the other divides by answered cases only. A judge can reach perfect precision
+  by abstaining on everything, so precision quoted without an abstention rate is not a result.
+- **Abstention is scored by lift, not rate.** The test is whether a judge abstains
+  *differentially* on the 20 `unclear` cases versus the 105 scoreable ones. A 90% abstention rate
+  everywhere carries no information, however high it is.
+
+And one it refuses to do at all: the response cache is keyed on a hash of the rendered context,
+the prompt and the model, not on the case id. Temperature 0 is not determinism, so the cache is
+what makes a re-run reproducible — but only if editing the prompt invalidates it. Keyed on the
+case id, a prompt change would have appeared to have no effect.
+
 ## Roadmap
 
 | stage | state |
@@ -739,8 +862,8 @@ label set that predates manifests and therefore cannot be regenerated.
 | 2 · Retrieval — free baselines against a shuffled floor | **built, measured** |
 | 2b · Retrieval — embeddings, chunked and cached | **built, measured, lost 5/5** |
 | 2c · Hand-labelled docs, candidates = the whole tree — the ground truth 2b needs | **built, 18 docs labelled, split verdict** |
-| 2d · Cross-encoder reranker over `lexical`'s top 20, scored on both corpora | next |
-| 3 · Claim typing and verification agents | designed |
+| 2d · Cross-encoder reranker over `lexical`'s top 20, scored on both corpora | designed |
+| 3 · The judge — does a document make a false claim, at one commit | **harness built, floors run, model arm next** |
 | 4 · Null-run harness — same input twice, to establish the noise floor | designed |
 | 5 · GitHub App + CI eval gate | designed |
 
@@ -789,6 +912,27 @@ uv run python scripts/complementarity.py data/mine.jsonl
 `--embed-model` bare means `BAAI/bge-small-en-v1.5`; naming a model instead swaps it, and
 `BAAI/bge-m3` is a one-flag upgrade at roughly 17x the compute — an overnight run rather than a
 different design. Add `--embed-device mps` on Apple silicon.
+
+Stage 3 likewise runs free by default. `judge-cases` prints the class balance and the floors and
+touches neither a clone nor a model; `judge-eval` with no flags runs the three judges that need no
+key, which is the half of the result that makes the other half readable:
+
+```
+uv run driftwood judge-cases
+uv run driftwood judge-eval --arms oracle retrieved --out data/scores/judge-floors.json
+uv run driftwood judge-eval --dump-prompt
+```
+
+`--dump-prompt` prints one rendered prompt so a person can check by eye that no diff, no commit
+subject and no mining evidence reached it. The model arm is an extra and needs a key:
+
+```
+uv sync --extra judge
+uv run driftwood judge-eval --judges always-not-false always-false lexical-absence model
+```
+
+Replies are cached under `.cache/judgements`, keyed by content rather than by case id, so
+re-running is free and editing the prompt is not.
 
 **Caching is the default and opting out is the flag**, which is the way round that matters here.
 The corpus is 8148 unique code blobs behind 629 trees, so a forgotten cache produces an identical
