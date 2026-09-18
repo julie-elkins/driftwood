@@ -456,6 +456,14 @@ def main(argv: list[str] | None = None) -> int:
     keep.add_argument("--out", type=Path, default=None)
     keep.set_defaults(func=_cmd_retention)
 
+    # Stage 2 registers its own subcommand rather than being implemented here: the
+    # mining package is the project's ground truth and everything downstream is
+    # measured against it, so it should not grow a dependency on the thing it
+    # grades. Imported lazily for the same reason `mine` does not import a model.
+    from ..retrieval.cli import add_parser as add_retrieval_parser
+
+    add_retrieval_parser(subparsers)
+
     args = parser.parse_args(argv)
     return int(args.func(args))
 

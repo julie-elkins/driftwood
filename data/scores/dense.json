@@ -1,0 +1,598 @@
+{
+  "eval": "retrieval-doc-to-code",
+  "scored_at": "each query's own at_sha",
+  "null_trials": 40,
+  "ranker_provenance": {
+    "dense_model": "BAAI/bge-small-en-v1.5",
+    "dense_dim": 384,
+    "chunk_size": 1600,
+    "chunk_overlap": 200,
+    "pooling": "max over (doc chunk, code chunk) pairs",
+    "ablation": "evidence tokens redacted from doc text, not set-subtracted"
+  },
+  "dataset": [
+    {
+      "repo": "encode/httpx",
+      "queries": 148,
+      "distinct_docs": 16,
+      "distinct_shas": 100,
+      "judged_pairs": 343,
+      "pool_min_median_max": [
+        8,
+        24,
+        44
+      ],
+      "busiest_doc_share": 0.25675675675675674,
+      "dropped_positives": 0,
+      "dropped_docs": 0,
+      "shas_unreadable": []
+    },
+    {
+      "repo": "fastapi/fastapi",
+      "queries": 82,
+      "distinct_docs": 59,
+      "distinct_shas": 38,
+      "judged_pairs": 180,
+      "pool_min_median_max": [
+        507,
+        685,
+        790
+      ],
+      "busiest_doc_share": 0.06097560975609756,
+      "dropped_positives": 0,
+      "dropped_docs": 0,
+      "shas_unreadable": []
+    },
+    {
+      "repo": "pallets/flask",
+      "queries": 396,
+      "distinct_docs": 62,
+      "distinct_shas": 236,
+      "judged_pairs": 727,
+      "pool_min_median_max": [
+        5,
+        35,
+        80
+      ],
+      "busiest_doc_share": 0.1717171717171717,
+      "dropped_positives": 0,
+      "dropped_docs": 0,
+      "shas_unreadable": []
+    },
+    {
+      "repo": "psf/requests",
+      "queries": 53,
+      "distinct_docs": 11,
+      "distinct_shas": 37,
+      "judged_pairs": 75,
+      "pool_min_median_max": [
+        21,
+        23,
+        109
+      ],
+      "busiest_doc_share": 0.2641509433962264,
+      "dropped_positives": 0,
+      "dropped_docs": 0,
+      "shas_unreadable": []
+    },
+    {
+      "repo": "pydantic/pydantic",
+      "queries": 346,
+      "distinct_docs": 69,
+      "distinct_shas": 218,
+      "judged_pairs": 810,
+      "pool_min_median_max": [
+        37,
+        101,
+        261
+      ],
+      "busiest_doc_share": 0.06936416184971098,
+      "dropped_positives": 0,
+      "dropped_docs": 0,
+      "shas_unreadable": []
+    }
+  ],
+  "results": [
+    {
+      "repo": "encode/httpx",
+      "ranker": "shuffle (floor)",
+      "pool_median": 24,
+      "queries": 148,
+      "recall_at": {
+        "1": 0.040844594594594594,
+        "5": 0.2019510135135135,
+        "10": 0.4094510135135135
+      },
+      "mrr": 0.24651759466588302,
+      "recall_noise_range": {
+        "1": [
+          0.01599099099099099,
+          0.07759009009009009
+        ],
+        "5": [
+          0.15754504504504505,
+          0.2818693693693694
+        ],
+        "10": [
+          0.3164414414414415,
+          0.48445945945945945
+        ]
+      },
+      "mrr_noise_range": [
+        0.1978214009947093,
+        0.3356678324431807
+      ]
+    },
+    {
+      "repo": "encode/httpx",
+      "ranker": "path",
+      "pool_median": 24,
+      "queries": 148,
+      "recall_at": {
+        "1": 0.030855855855855853,
+        "5": 0.34155405405405403,
+        "10": 0.5817567567567568
+      },
+      "mrr": 0.2676365093769467,
+      "recall_noise_range": null,
+      "mrr_noise_range": null
+    },
+    {
+      "repo": "encode/httpx",
+      "ranker": "lexical",
+      "pool_median": 24,
+      "queries": 148,
+      "recall_at": {
+        "1": 0.2724099099099099,
+        "5": 0.6236486486486487,
+        "10": 0.8567567567567568
+      },
+      "mrr": 0.6778913400358646,
+      "recall_noise_range": null,
+      "mrr_noise_range": null
+    },
+    {
+      "repo": "encode/httpx",
+      "ranker": "lexical-ablated",
+      "pool_median": 24,
+      "queries": 148,
+      "recall_at": {
+        "1": 0.2588963963963964,
+        "5": 0.5926801801801802,
+        "10": 0.8186936936936937
+      },
+      "mrr": 0.6657732751482751,
+      "recall_noise_range": null,
+      "mrr_noise_range": null
+    },
+    {
+      "repo": "encode/httpx",
+      "ranker": "dense",
+      "pool_median": 24,
+      "queries": 148,
+      "recall_at": {
+        "1": 0.16948198198198197,
+        "5": 0.5855855855855856,
+        "10": 0.7791666666666667
+      },
+      "mrr": 0.507910909604021,
+      "recall_noise_range": null,
+      "mrr_noise_range": null
+    },
+    {
+      "repo": "encode/httpx",
+      "ranker": "dense-ablated",
+      "pool_median": 24,
+      "queries": 148,
+      "recall_at": {
+        "1": 0.17657657657657658,
+        "5": 0.5315315315315315,
+        "10": 0.7733108108108109
+      },
+      "mrr": 0.5013388256422312,
+      "recall_noise_range": null,
+      "mrr_noise_range": null
+    },
+    {
+      "repo": "fastapi/fastapi",
+      "ranker": "shuffle (floor)",
+      "pool_median": 685,
+      "queries": 82,
+      "recall_at": {
+        "1": 0.0012906504065040652,
+        "5": 0.006173780487804878,
+        "10": 0.012962398373983738
+      },
+      "mrr": 0.017124139771130923,
+      "recall_noise_range": {
+        "1": [
+          0.0,
+          0.012195121951219513
+        ],
+        "5": [
+          0.0,
+          0.03252032520325203
+        ],
+        "10": [
+          0.0,
+          0.036585365853658534
+        ]
+      },
+      "mrr_noise_range": [
+        0.008050129648911832,
+        0.034839342718558354
+      ]
+    },
+    {
+      "repo": "fastapi/fastapi",
+      "ranker": "path",
+      "pool_median": 685,
+      "queries": 82,
+      "recall_at": {
+        "1": 0.08943089430894309,
+        "5": 0.2510162601626016,
+        "10": 0.2784552845528455
+      },
+      "mrr": 0.20612515706497045,
+      "recall_noise_range": null,
+      "mrr_noise_range": null
+    },
+    {
+      "repo": "fastapi/fastapi",
+      "ranker": "lexical",
+      "pool_median": 685,
+      "queries": 82,
+      "recall_at": {
+        "1": 0.2967479674796748,
+        "5": 0.5376016260162602,
+        "10": 0.6347560975609756
+      },
+      "mrr": 0.4755441004640057,
+      "recall_noise_range": null,
+      "mrr_noise_range": null
+    },
+    {
+      "repo": "fastapi/fastapi",
+      "ranker": "lexical-ablated",
+      "pool_median": 685,
+      "queries": 82,
+      "recall_at": {
+        "1": 0.2845528455284553,
+        "5": 0.48577235772357724,
+        "10": 0.6058943089430894
+      },
+      "mrr": 0.4545843927676018,
+      "recall_noise_range": null,
+      "mrr_noise_range": null
+    },
+    {
+      "repo": "fastapi/fastapi",
+      "ranker": "dense",
+      "pool_median": 685,
+      "queries": 82,
+      "recall_at": {
+        "1": 0.22378048780487805,
+        "5": 0.4317073170731707,
+        "10": 0.5050813008130081
+      },
+      "mrr": 0.4515674653410629,
+      "recall_noise_range": null,
+      "mrr_noise_range": null
+    },
+    {
+      "repo": "fastapi/fastapi",
+      "ranker": "dense-ablated",
+      "pool_median": 685,
+      "queries": 82,
+      "recall_at": {
+        "1": 0.14715447154471545,
+        "5": 0.46829268292682924,
+        "10": 0.5217479674796748
+      },
+      "mrr": 0.38854492064075347,
+      "recall_noise_range": null,
+      "mrr_noise_range": null
+    },
+    {
+      "repo": "pallets/flask",
+      "ranker": "shuffle (floor)",
+      "pool_median": 35,
+      "queries": 396,
+      "recall_at": {
+        "1": 0.03959701178451178,
+        "5": 0.19598800505050504,
+        "10": 0.35898148148148146
+      },
+      "mrr": 0.18791963573251363,
+      "recall_noise_range": {
+        "1": [
+          0.015782828282828284,
+          0.0787037037037037
+        ],
+        "5": [
+          0.1454124579124579,
+          0.24103535353535355
+        ],
+        "10": [
+          0.31982323232323234,
+          0.39646464646464646
+        ]
+      },
+      "mrr_noise_range": [
+        0.16108970796623823,
+        0.23922611247375414
+      ]
+    },
+    {
+      "repo": "pallets/flask",
+      "ranker": "path",
+      "pool_median": 35,
+      "queries": 396,
+      "recall_at": {
+        "1": 0.08901515151515152,
+        "5": 0.13846801346801346,
+        "10": 0.34301346801346805
+      },
+      "mrr": 0.18773268539047092,
+      "recall_noise_range": null,
+      "mrr_noise_range": null
+    },
+    {
+      "repo": "pallets/flask",
+      "ranker": "lexical",
+      "pool_median": 35,
+      "queries": 396,
+      "recall_at": {
+        "1": 0.36809764309764315,
+        "5": 0.6970538720538721,
+        "10": 0.8487373737373738
+      },
+      "mrr": 0.6809532120163555,
+      "recall_noise_range": null,
+      "mrr_noise_range": null
+    },
+    {
+      "repo": "pallets/flask",
+      "ranker": "lexical-ablated",
+      "pool_median": 35,
+      "queries": 396,
+      "recall_at": {
+        "1": 0.3554713804713805,
+        "5": 0.6640151515151514,
+        "10": 0.821506734006734
+      },
+      "mrr": 0.6620763340896136,
+      "recall_noise_range": null,
+      "mrr_noise_range": null
+    },
+    {
+      "repo": "pallets/flask",
+      "ranker": "dense",
+      "pool_median": 35,
+      "queries": 396,
+      "recall_at": {
+        "1": 0.2758838383838384,
+        "5": 0.6093434343434344,
+        "10": 0.764983164983165
+      },
+      "mrr": 0.567164353312425,
+      "recall_noise_range": null,
+      "mrr_noise_range": null
+    },
+    {
+      "repo": "pallets/flask",
+      "ranker": "dense-ablated",
+      "pool_median": 35,
+      "queries": 396,
+      "recall_at": {
+        "1": 0.2620791245791246,
+        "5": 0.5762205387205387,
+        "10": 0.7640572390572391
+      },
+      "mrr": 0.555226013838658,
+      "recall_noise_range": null,
+      "mrr_noise_range": null
+    },
+    {
+      "repo": "psf/requests",
+      "ranker": "shuffle (floor)",
+      "pool_median": 23,
+      "queries": 53,
+      "recall_at": {
+        "1": 0.03490566037735849,
+        "5": 0.17991352201257862,
+        "10": 0.3418238993710692
+      },
+      "mrr": 0.1555591898800261,
+      "recall_noise_range": {
+        "1": [
+          0.0,
+          0.1069182389937107
+        ],
+        "5": [
+          0.06132075471698113,
+          0.2971698113207547
+        ],
+        "10": [
+          0.19654088050314464,
+          0.5455974842767296
+        ]
+      },
+      "mrr_noise_range": [
+        0.09158525726453193,
+        0.22451253579184824
+      ]
+    },
+    {
+      "repo": "psf/requests",
+      "ranker": "path",
+      "pool_median": 23,
+      "queries": 53,
+      "recall_at": {
+        "1": 0.0,
+        "5": 0.35062893081761004,
+        "10": 0.45754716981132076
+      },
+      "mrr": 0.1635190150486733,
+      "recall_noise_range": null,
+      "mrr_noise_range": null
+    },
+    {
+      "repo": "psf/requests",
+      "ranker": "lexical",
+      "pool_median": 23,
+      "queries": 53,
+      "recall_at": {
+        "1": 0.15566037735849056,
+        "5": 0.5644654088050315,
+        "10": 0.8128930817610064
+      },
+      "mrr": 0.391224715905626,
+      "recall_noise_range": null,
+      "mrr_noise_range": null
+    },
+    {
+      "repo": "psf/requests",
+      "ranker": "lexical-ablated",
+      "pool_median": 23,
+      "queries": 53,
+      "recall_at": {
+        "1": 0.15566037735849056,
+        "5": 0.4559748427672956,
+        "10": 0.7562893081761006
+      },
+      "mrr": 0.36597977299683004,
+      "recall_noise_range": null,
+      "mrr_noise_range": null
+    },
+    {
+      "repo": "psf/requests",
+      "ranker": "dense",
+      "pool_median": 23,
+      "queries": 53,
+      "recall_at": {
+        "1": 0.07075471698113207,
+        "5": 0.39622641509433965,
+        "10": 0.6588050314465408
+      },
+      "mrr": 0.28800915362165136,
+      "recall_noise_range": null,
+      "mrr_noise_range": null
+    },
+    {
+      "repo": "psf/requests",
+      "ranker": "dense-ablated",
+      "pool_median": 23,
+      "queries": 53,
+      "recall_at": {
+        "1": 0.0770440251572327,
+        "5": 0.37264150943396224,
+        "10": 0.621069182389937
+      },
+      "mrr": 0.2993176412174513,
+      "recall_noise_range": null,
+      "mrr_noise_range": null
+    },
+    {
+      "repo": "pydantic/pydantic",
+      "ranker": "shuffle (floor)",
+      "pool_median": 101,
+      "queries": 346,
+      "recall_at": {
+        "1": 0.011386078998073219,
+        "5": 0.05390293834296724,
+        "10": 0.10761440269749518
+      },
+      "mrr": 0.09632202833016368,
+      "recall_noise_range": {
+        "1": [
+          0.0005780346820809249,
+          0.02552986512524085
+        ],
+        "5": [
+          0.03439306358381503,
+          0.07957610789980732
+        ],
+        "10": [
+          0.07967244701348747,
+          0.1396917148362235
+        ]
+      },
+      "mrr_noise_range": [
+        0.07380797476415929,
+        0.12936253983888907
+      ]
+    },
+    {
+      "repo": "pydantic/pydantic",
+      "ranker": "path",
+      "pool_median": 101,
+      "queries": 346,
+      "recall_at": {
+        "1": 0.13116570327552987,
+        "5": 0.1823217726396917,
+        "10": 0.2466281310211946
+      },
+      "mrr": 0.3095354598285763,
+      "recall_noise_range": null,
+      "mrr_noise_range": null
+    },
+    {
+      "repo": "pydantic/pydantic",
+      "ranker": "lexical",
+      "pool_median": 101,
+      "queries": 346,
+      "recall_at": {
+        "1": 0.1846339113680154,
+        "5": 0.4152697495183044,
+        "10": 0.5894508670520231
+      },
+      "mrr": 0.4856964929541218,
+      "recall_noise_range": null,
+      "mrr_noise_range": null
+    },
+    {
+      "repo": "pydantic/pydantic",
+      "ranker": "lexical-ablated",
+      "pool_median": 101,
+      "queries": 346,
+      "recall_at": {
+        "1": 0.17957610789980732,
+        "5": 0.3983622350674374,
+        "10": 0.5697013487475916
+      },
+      "mrr": 0.4674973237346661,
+      "recall_noise_range": null,
+      "mrr_noise_range": null
+    },
+    {
+      "repo": "pydantic/pydantic",
+      "ranker": "dense",
+      "pool_median": 101,
+      "queries": 346,
+      "recall_at": {
+        "1": 0.13203275529865124,
+        "5": 0.33347784200385355,
+        "10": 0.47273603082851634
+      },
+      "mrr": 0.3693717145428564,
+      "recall_noise_range": null,
+      "mrr_noise_range": null
+    },
+    {
+      "repo": "pydantic/pydantic",
+      "ranker": "dense-ablated",
+      "pool_median": 101,
+      "queries": 346,
+      "recall_at": {
+        "1": 0.10317919075144509,
+        "5": 0.2518304431599229,
+        "10": 0.35428709055876684
+      },
+      "mrr": 0.29680987392492353,
+      "recall_noise_range": null,
+      "mrr_noise_range": null
+    }
+  ],
+  "labels": "data/labels-v11.jsonl"
+}

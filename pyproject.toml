@@ -9,6 +9,16 @@ authors = [
 requires-python = ">=3.12"
 dependencies = []
 
+# Stages 1 and 2 stay dependency-free on purpose: the ground-truth layer and the
+# free baselines should be regenerable in CI years from now without resolving an
+# inference stack. The dense arm needs one, so it is an extra rather than a
+# dependency -- `uv sync --extra embed`.
+[project.optional-dependencies]
+embed = [
+    "numpy>=2.0",
+    "sentence-transformers>=3.0",
+]
+
 [project.scripts]
 driftwood = "driftwood.mining.cli:main"
 
@@ -19,4 +29,7 @@ build-backend = "uv_build"
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",
+    # numpy alone, so the chunking and pooling logic is testable against a stub
+    # encoder without downloading a model or torch.
+    "numpy>=2.0",
 ]
