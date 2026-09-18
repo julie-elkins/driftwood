@@ -1,0 +1,58 @@
+{
+  "labels_file": "data/labels-v11.jsonl",
+  "sheets": [
+    "review/shape-B-batch-04-v11.md"
+  ],
+  "reviewed": 20,
+  "skipped_unlabelled": [],
+  "skipped_not_in_label_file": [],
+  "overall": {
+    "n": 20,
+    "drift": 5,
+    "precision": 0.25,
+    "ci95": [
+      0.1119,
+      0.4687
+    ],
+    "verdicts": {
+      "cosmetic": 11,
+      "drift": 5,
+      "unclear": 3,
+      "new": 1
+    }
+  },
+  "by_shape": {
+    "B": {
+      "n": 20,
+      "drift": 5,
+      "precision": 0.25,
+      "ci95": [
+        0.1119,
+        0.4687
+      ],
+      "verdicts": {
+        "cosmetic": 11,
+        "drift": 5,
+        "unclear": 3,
+        "new": 1
+      }
+    }
+  },
+  "by_basis": {
+    "doc_only_commit_modified_existing_prose": {
+      "n": 20,
+      "drift": 5,
+      "precision": 0.25,
+      "ci95": [
+        0.1119,
+        0.4687
+      ],
+      "verdicts": {
+        "cosmetic": 11,
+        "drift": 5,
+        "unclear": 3,
+        "new": 1
+      }
+    }
+  }
+}

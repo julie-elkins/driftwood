@@ -21,7 +21,7 @@ The question is always: **at the parent commit, was this documentation false abo
 - **doc** `docs/tutorial/setup.rst`
 - **no longer asserted after this commit** `setuptools`
 
-**VERDICT: ?**
+**VERDICT: `cosmetic`**
 
 <details><summary>doc diff</summary>
 
@@ -52,7 +52,7 @@ index 78b6390a..4bedb54c 100644
 - **doc** `README.md`
 - **no longer asserted after this commit** `requests3`, `httpcore`, `response`, `headers`, `encode`, `core`, `text`
 
-**VERDICT: ?**
+**VERDICT: `cosmetic`**
 
 <details><summary>doc diff</summary>
 
@@ -146,7 +146,7 @@ index 94d2e72..4aa8778 100644
 - **doc** `docs/python3.rst`
 - **no longer asserted after this commit** `itsdangerous`, `werkzeug`, `jinja2`
 
-**VERDICT: ?**
+**VERDICT: `cosmetic`**
 
 <details><summary>doc diff</summary>
 
@@ -219,7 +219,7 @@ index 4d488f16..61ef3eaa 100644
 - **doc** `docs/en/docs/tutorial/first-steps.md`
 - **no longer asserted after this commit** `uvicorn`, `reload`, `main`
 
-**VERDICT: ?**
+**VERDICT: `drift`**
 
 <details><summary>doc diff</summary>
 
@@ -254,7 +254,7 @@ index 35b2feb41..d18b25d97 100644
 - **doc** `docs/deploying/mod_wsgi.rst`
 - **no longer asserted after this commit** `wiki`
 
-**VERDICT: ?**
+**VERDICT: `cosmetic`**
 
 <details><summary>doc diff</summary>
 
@@ -296,7 +296,7 @@ index b06a1904..0f4af6c3 100644
 - **doc** `docs/tutorial/folders.rst`
 - **no longer asserted after this commit** `http`
 
-**VERDICT: ?**
+**VERDICT: `cosmetic`**
 
 <details><summary>doc diff</summary>
 
@@ -330,7 +330,7 @@ index e1ff229d..550d5a9b 100644
 - **doc** `docs/patterns/mongoengine.rst`
 - **no longer asserted after this commit** `get_connection`, `age__not__mod`, `istartswith`, `stringfield`, `collection`, `connection`, `startswith`, `icontains`, `iendswith`, `objectids`, `contains`, `endswith`
 
-**VERDICT: ?**
+**VERDICT: `unclear`**
 
 <details><summary>doc diff</summary>
 
@@ -470,7 +470,7 @@ index d635128e..015e7b61 100644
 - **doc** `docs/cli.rst`
 - **no longer asserted after this commit** `create_user`
 
-**VERDICT: ?**
+**VERDICT: `drift`**
 
 <details><summary>doc diff</summary>
 
@@ -585,7 +585,7 @@ index a8dd8f24..85b99fcb 100644
 - **doc** `docs/community/out-there.rst`
 - **no longer asserted after this commit** `humans`, `python`, `talk`
 
-**VERDICT: ?**
+**VERDICT: `cosmetic`**
 
 <details><summary>doc diff</summary>
 
@@ -634,7 +634,7 @@ index c33ab3c9..c75c71f6 100644
 - **doc** `docs/en/docs/deployment/docker.md`
 - **no longer asserted after this commit** `dockerfile`, `pyproject`, `gunicorn`, `tiangolo`, `headers`, `python3`, `uvicorn`, `without`, `export`, `hashes`, `num:10`, `num:11`
 
-**VERDICT: ?**
+**VERDICT: `unclear`**
 
 <details><summary>doc diff</summary>
 
@@ -725,7 +725,7 @@ index ab1c2201f..2d832a238 100644
 - **doc** `docs/en/docs/fastapi-cli.md`
 - **no longer asserted after this commit** `fast`
 
-**VERDICT: ?**
+**VERDICT: `new`**
 
 <details><summary>doc diff</summary>
 
@@ -849,7 +849,7 @@ index e0b40b500..17898888f 100644
 - **doc** `docs/deploying.rst`
 - **no longer asserted after this commit** `browsers`
 
-**VERDICT: ?**
+**VERDICT: `cosmetic`**
 
 <details><summary>doc diff</summary>
 
@@ -991,7 +991,7 @@ index e04112f0..0d0ed19e 100644
 - **doc** `docs/patterns/sqlite3.rst`
 - **no longer asserted after this commit** `after_request`, `after`
 
-**VERDICT: ?**
+**VERDICT: `drift`**
 
 <details><summary>doc diff</summary>
 
@@ -1063,7 +1063,7 @@ index 68833234..d0ec5a27 100644
 - **doc** `docs/deploying/wsgi-standalone.rst`
 - **no longer asserted after this commit** `friendfeed`, `tornado`, `friend`, `feed`
 
-**VERDICT: ?**
+**VERDICT: `cosmetic`**
 
 <details><summary>doc diff</summary>
 
@@ -1117,7 +1117,7 @@ index 11d07831..77a564a2 100644
 - **doc** `README.md`
 - **no longer asserted after this commit** `content`, `headers`, `params`, `init`
 
-**VERDICT: ?**
+**VERDICT: `cosmetic`**
 
 <details><summary>doc diff</summary>
 
@@ -1156,7 +1156,7 @@ index 69bda6e..6f4e7cf 100644
 - **doc** `docs/index.md`
 - **no longer asserted after this commit** `ver:0.14`, `chardet`
 
-**VERDICT: ?**
+**VERDICT: `drift`**
 
 <details><summary>doc diff</summary>
 
@@ -1198,7 +1198,7 @@ index c0d5e1a..16194de 100644
 - **doc** `docs/installation.rst`
 - **no longer asserted after this commit** `ez_setup`, `setup`
 
-**VERDICT: ?**
+**VERDICT: `unclear`**
 
 <details><summary>doc diff</summary>
 
@@ -1313,7 +1313,7 @@ index 638d07ce..91d95270 100644
 - **doc** `docs/extensions.rst`
 - **no longer asserted after this commit** `extension`
 
-**VERDICT: ?**
+**VERDICT: `cosmetic`**
 
 <details><summary>doc diff</summary>
 
@@ -1347,7 +1347,7 @@ index ea9980e3..836552d7 100644
 - **doc** `docs/api.rst`
 - **no longer asserted after this commit** `resources`, `faking`
 
-**VERDICT: ?**
+**VERDICT: `cosmetic`**
 
 <details><summary>doc diff</summary>
 
@@ -1385,7 +1385,7 @@ index 09fc71a9..1a87f8d4 100644
 - **doc** `docs/contributing.md`
 - **no longer asserted after this commit** `docs`, `make`
 
-**VERDICT: ?**
+**VERDICT: `drift`**
 
 <details><summary>doc diff</summary>
 
