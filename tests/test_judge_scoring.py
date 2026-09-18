@@ -8,6 +8,7 @@ incomparable to the pre-registration.
 
 from __future__ import annotations
 
+import inspect
 import json
 from pathlib import Path
 
@@ -18,11 +19,13 @@ from driftwood.judge.context import CodeFile, JudgeContext
 from driftwood.judge.evaluate import (
     abstention_calibration,
     confusion,
+    format_results,
     noise_range,
     score,
     to_json,
 )
 from driftwood.judge.judge import (
+    DEFAULT_MAX_TOKENS,
     SYSTEM_PROMPT,
     AlwaysJudge,
     AnthropicJudge,
@@ -271,33 +274,47 @@ class TestReadingAModelsReply:
 
 
 class _StubClient:
-    """Counts calls, so a cache hit is observable rather than assumed."""
+    """Counts calls, so a cache hit is observable rather than assumed.
 
-    def __init__(self, reply: str) -> None:
+    `stop_reason` and `block_type` exist so the truncated-reply path can be exercised
+    without spending anything. The real shape of that failure, observed: one block of
+    type `thinking` whose content is empty, and `stop_reason: max_tokens`.
+    """
+
+    def __init__(
+        self, reply: str, *, stop_reason: str = "end_turn", block_type: str = "text"
+    ) -> None:
         self.reply = reply
         self.calls: list[dict] = []
         self.messages = self
+        self._stop_reason = stop_reason
+        self._block_type = block_type
 
     def create(self, **kwargs):
         self.calls.append(kwargs)
+        outer = self
 
         class _Block:
-            type = "text"
-            text = self.reply
+            type = outer._block_type
+            text = outer.reply if outer._block_type == "text" else ""
 
         class _Response:
             content = [_Block()]
+            stop_reason = outer._stop_reason
 
         return _Response()
 
 
 class TestTheModelArm:
-    def test_it_asks_at_temperature_zero_with_the_versioned_prompt(self, tmp_path):
+    def test_it_asks_with_the_versioned_prompt(self, tmp_path):
+        # This used to assert `calls[0]["temperature"] == 0`, and passed, against an
+        # SDK with no such parameter. What the request may contain is now checked
+        # against the real signature in `TestTheCallMatchesTheInstalledSDK`; what it
+        # must contain is checked here.
         client = _StubClient('{"verdict": "false", "reason": "r"}')
         judge = AnthropicJudge(client=client, cache_dir=tmp_path, model="m")
         got = judge.judge(_context("c1"))
         assert got.answer is True
-        assert client.calls[0]["temperature"] == 0
         assert client.calls[0]["system"] == SYSTEM_PROMPT
 
     def test_a_second_ask_comes_from_the_cache(self, tmp_path):
@@ -309,8 +326,9 @@ class TestTheModelArm:
         assert again.cached is True
 
     def test_a_changed_prompt_re_asks(self, tmp_path):
-        # Temperature 0 is not determinism, so the cache is what makes a re-run
-        # reproducible -- and that is only safe if a changed harness invalidates it.
+        # There is no temperature to pin, so the disk cache is the only thing making a
+        # re-run reproducible -- and that is only safe if a changed harness invalidates
+        # it, which is what this checks.
         client = _StubClient('{"verdict": "false", "reason": "r"}')
         AnthropicJudge(client=client, cache_dir=tmp_path, model="m").judge(_context("c1"))
         AnthropicJudge(
@@ -344,6 +362,128 @@ class TestTheModelArm:
         # flag value argparse rejected. Whether the suggested command is runnable is
         # checked against the parser in `tests/test_judge_cli.py`; matching prose
         # against prose is what let the false instruction through.
+
+
+class TestARunOutOfBudgetIsNotAnAbstention:
+    """The failure that made the first real model arm unreadable, pinned.
+
+    A 700-token reply budget covered the answer four times over and still truncated 16
+    of 45 replies, because reasoning tokens come out of the same budget: the response
+    arrived as a single empty `thinking` block with `stop_reason: max_tokens`. Every one
+    was scored as an abstention, so the arm reported F1 0.00 at a 71% abstention rate --
+    which reads as a judge with no signal, and was a harness with no room.
+
+    What makes it worth a test class rather than a bigger number: truncation scales with
+    prompt length, prompt length scales with document size, and the hard cases are the
+    long ones. 11 of the 13 real drift cases were among the 16. An instrument that fails
+    on the positives and succeeds on the negatives does not add noise to a result, it
+    manufactures one.
+    """
+
+    def _truncated(self, tmp_path):
+        client = _StubClient("", stop_reason="max_tokens", block_type="thinking")
+        judge = AnthropicJudge(client=client, cache_dir=tmp_path, model="m")
+        return judge.judge(_context("c1"))
+
+    def test_it_is_flagged_as_truncated_and_says_so_in_the_reason(self, tmp_path):
+        got = self._truncated(tmp_path)
+        assert got.truncated is True
+        assert got.answer is None
+        assert got.stop_reason == "max_tokens"
+        # The reason field, not just a counter: this is the line a reader sees next to
+        # the case when they go looking for why it abstained.
+        assert "TRUNCATED" in got.reason and "--max-tokens" in got.reason
+
+    def test_the_evidence_survives_on_disk(self, tmp_path):
+        # The cache held `"text": ""` and nothing else for all 16, and an empty string is
+        # the one value that explains nothing -- a refusal, a network oddity and an
+        # exhausted budget all look identical. The block types and the stop reason are
+        # what turn it into a one-glance diagnosis.
+        self._truncated(tmp_path)
+        written = json.loads(next(iter(tmp_path.glob("*.json"))).read_text())
+        assert written["stop_reason"] == "max_tokens"
+        assert written["blocks"] == ["thinking"]
+        assert written["request"]["max_tokens"] == DEFAULT_MAX_TOKENS
+
+    def test_a_cached_truncation_is_still_flagged(self, tmp_path):
+        # Otherwise the flag lasts exactly one run and the second one silently reports
+        # 16 clean abstentions.
+        self._truncated(tmp_path)
+        again = AnthropicJudge(
+            client=_StubClient("never reached"), cache_dir=tmp_path, model="m"
+        ).judge(_context("c1"))
+        assert again.cached and again.truncated
+
+    def test_the_scores_count_it_apart_from_other_unparsed_replies(self):
+        cases = [_case("p1", "drift"), _case("p2", "drift")]
+        judgements = {
+            "p1": Judgement(
+                example_id="p1", arm="oracle", judge="model:m", answer=None,
+                unparsed=True, truncated=True, stop_reason="max_tokens",
+            ),
+            "p2": Judgement(
+                example_id="p2", arm="oracle", judge="model:m", answer=None,
+                unparsed=True, reason="answered in prose",
+            ),
+        }
+        got = score(cases, judgements)
+        assert got.unparsed == 2
+        assert got.truncated == 1  # the harness's fault, separated from the model's
+
+    def test_the_report_refuses_to_present_it_as_a_result(self):
+        cases = [_case("p1", "drift")]
+        judgements = {
+            "p1": Judgement(
+                example_id="p1", arm="oracle", judge="model:m", answer=None,
+                unparsed=True, truncated=True, stop_reason="max_tokens",
+            )
+        }
+        rendered = format_results(cases, {"model:m": judgements}, arm="oracle")
+        assert "NOT A RESULT" in rendered
+        # And it says why the damage is not random, because "1 of 1 truncated" invites
+        # the reader to treat it as missing data rather than as biased data.
+        assert "hard cases" in rendered
+
+
+class TestTheCallMatchesTheInstalledSDK:
+    """`_StubClient.create` takes `**kwargs`; the real one does not. Pin the gap.
+
+    This class exists because `temperature=0` sat in the request for as long as it did
+    while every test above passed: the only thing the call shape was ever checked
+    against was a double written to accept anything. The first real run died on
+    `TypeError: Messages.create() got an unexpected keyword argument 'temperature'`
+    -- after printing the spend estimate, at the exact moment money was about to be
+    spent, which is the worst available time to learn it.
+
+    `bind_partial` against the real signature reproduces that failure with no request,
+    no key and no cost. Skipped rather than failed when the SDK is absent, because the
+    floors are meant to run with no optional extras installed at all.
+    """
+
+    def _sent(self, tmp_path) -> dict:
+        client = _StubClient('{"verdict": "false", "reason": "r"}')
+        AnthropicJudge(client=client, cache_dir=tmp_path, model="m").judge(_context("c1"))
+        return client.calls[0]
+
+    def test_every_argument_is_one_the_real_sdk_accepts(self, tmp_path):
+        messages = pytest.importorskip("anthropic.resources.messages")
+        signature = inspect.signature(messages.Messages.create)
+        # `None` stands in for `self`: the signature is read off the unbound function.
+        # If a future SDK grows a `**kwargs`, this stops proving anything -- so assert
+        # that it has not, rather than letting the test go quietly vacuous.
+        kinds = {p.kind for p in signature.parameters.values()}
+        assert inspect.Parameter.VAR_KEYWORD not in kinds, (
+            "Messages.create now absorbs arbitrary keywords, so binding no longer "
+            "rejects a bad argument; this test needs a different check"
+        )
+        signature.bind_partial(None, **self._sent(tmp_path))
+
+    def test_no_sampling_controls_are_sent(self, tmp_path):
+        # Absent from the request, not merely absent from the signature. If a later SDK
+        # reintroduces `temperature`, putting it back has to be a decision -- and the
+        # docstring's claim that this harness has no determinism to lose has to be
+        # revisited rather than quietly becoming false.
+        assert not {"temperature", "top_p", "top_k"} & set(self._sent(tmp_path))
 
 
 class TestTheResultsFile:

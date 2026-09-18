@@ -102,9 +102,13 @@ def _build_judges(args: argparse.Namespace) -> dict[str, object]:
             judge.name = f"lexical-absence(>={threshold})"
             judges[judge.name] = judge
     if "model" in wanted:
-        judges[f"model:{args.model}"] = AnthropicJudge(
-            model=args.model, cache_dir=args.cache, max_tokens=args.max_tokens
+        judge = AnthropicJudge(
+            model=args.model, cache_dir=args.cache, max_tokens=args.max_tokens,
+            effort=args.effort,
         )
+        # Keyed by the judge's own name, which carries the effort setting when one was
+        # chosen. Two efforts in one results file must not collide under `model:<model>`.
+        judges[judge.name] = judge
     return judges
 
 
@@ -163,19 +167,42 @@ def _cmd_eval(args: argparse.Namespace) -> int:
             )
 
         truncated_docs = sum(1 for c in contexts.values() if c.doc_truncated)
+        # Reported because it was not, and 29 of the 45 oracle contexts were in it. The
+        # line below said "18 document(s) ... were cut" and said nothing about the code
+        # side, so the most common truncation in the run was the invisible one -- and a
+        # cut code file is what produces "the file shown is truncated and does not
+        # include the definitions", scored as an abstention.
+        truncated_code = sum(
+            1 for c in contexts.values() if any(f.truncated for f in c.code_files)
+        )
+        coverage = [c.marked_identifier_coverage for c in contexts.values()]
         found_oracle = [c.oracle_rank for c in contexts.values() if c.oracle_rank]
         print(
             f"arm {arm}: {len(contexts)} contexts built; "
-            f"{truncated_docs} document(s) hit the character budget and were cut; "
+            f"{truncated_docs} document(s) and {truncated_code} code file set(s) hit the "
+            f"character budget and were cut; "
             f"median candidate pool {_median([c.pool_size for c in contexts.values()]):.0f}"
+        )
+        # Printed before the spend, because it is the number that says whether the run
+        # can produce a readable answer at all. A judge shown code that does not contain
+        # what the document talks about can only abstain, and 68.9% of the first oracle
+        # arm did exactly that -- correctly, and at full price.
+        thin = sum(1 for v in coverage if v < 0.20)
+        print(
+            f"  answerability: the code shown contains a median "
+            f"{_median(coverage):.0%} of the identifiers the document marks up; "
+            f"{thin} of {len(coverage)} context(s) are under 20%, where a judge has "
+            "almost nothing to check the prose against"
         )
         if found_oracle:
             hit_at_k = sum(1 for r in found_oracle if r <= args.k) / len(found_oracle)
             print(
                 f"  retrieval check: the commit's own code file is in the top "
                 f"{args.k} for {hit_at_k:.0%} of the {len(found_oracle)} shape-A cases "
-                f"(median rank {_median(found_oracle):.0f}) -- this is the ceiling the "
-                "retrieved arm is working under"
+                f"(median rank {_median(found_oracle):.0f}). This used to be called the "
+                "ceiling the retrieved arm works under, which assumed the commit's own "
+                "file is the right answer; at a median 16% identifier coverage it often "
+                "is not, so read this as agreement with a noisy label, not as a ceiling"
             )
         print()
 
@@ -196,8 +223,13 @@ def _cmd_eval(args: argparse.Namespace) -> int:
                 system=SYSTEM_PROMPT,
                 max_tokens=args.max_tokens,
             )
-            print(f"arm {arm}: {', '.join(paid)} will be charged for")
-            print(format_spend(estimate))
+            # `flush=True`, because the point of a preflight is to be on screen BEFORE
+            # the spend. Python block-buffers stdout when it is not a terminal, so
+            # `judge-eval ... > run.log` or a pipe into `tee` showed an empty file for
+            # the whole run and the estimate appeared only after every call had been
+            # paid for. A safety notice that arrives after the event is decoration.
+            print(f"arm {arm}: {', '.join(paid)} will be charged for", flush=True)
+            print(format_spend(estimate), flush=True)
             if args.max_input_tokens and (
                 estimate["input_tokens_approx"] > args.max_input_tokens
             ):
@@ -307,7 +339,15 @@ def add_parser(subparsers) -> None:
     )
     ev.add_argument(
         "--max-tokens", type=int, default=DEFAULT_MAX_TOKENS,
-        help="reply budget per case; the spend estimate multiplies by it",
+        help="reply budget per case, covering REASONING as well as the answer -- 700 "
+             "was enough for the answer and truncated 16 of 45 replies mid-thought",
+    )
+    ev.add_argument(
+        "--effort", choices=("low", "medium", "high"), default=None,
+        help="how hard the model reasons before answering. Unset means the API default, "
+             "which is what the reported runs use; `low` skipped reasoning entirely and "
+             "cost 49 output tokens against 4,640 on one measured case. A dimension to "
+             "sweep, not a setting to quietly pick -- it changes the cache key",
     )
     ev.add_argument(
         "--max-input-tokens", type=int, default=0,

@@ -55,10 +55,24 @@ __all__ = [
     "SYSTEM_PROMPT",
 ]
 
-# A verdict plus a quoted claim and two sentences of reason. Named rather than inline
-# because the spend estimate multiplies by it, and the two drifting apart would make
-# the estimate quietly wrong in the safe-looking direction.
-DEFAULT_MAX_TOKENS = 700
+# The reply budget, and it is NOT the size of the answer. It was 700, sized by reading
+# the prompt -- a verdict, a quoted claim, two sentences -- and 700 is about four times
+# what the answer actually needs. It still truncated 16 of 45 replies, because reasoning
+# tokens are billed and budgeted as output: on the largest prompt the model spent 4,169
+# tokens thinking before writing 471 characters of answer, and a response can come back
+# as a single `thinking` block with no answer in it at all.
+#
+# Worse, the truncation was not random. Reasoning scales with how hard the case is, so
+# the 16 that died were the 16 LARGEST prompts, and 11 of the 13 real drift cases were
+# among them. An instrument that fails on the hard cases and succeeds on the easy ones
+# does not add noise, it manufactures a result -- the model arm scored F1 0.00 with a
+# 71% abstention rate, which read as a judge with no signal rather than as a budget.
+#
+# 6000 is the measured 4,640-token worst case plus headroom, not a guess. The floor
+# under it is the observation that the 29 replies that did fit averaged 329 tokens:
+# reasoning is adaptive, so a ceiling this high is paid for only on the cases that
+# need it.
+DEFAULT_MAX_TOKENS = 6000
 
 # The prompt is part of the experiment, so it is versioned with the code and hashed
 # into the cache key. Three things in it are load-bearing:
@@ -129,6 +143,13 @@ class Judgement:
     # Scored as an abstention and counted separately: a parse failure silently
     # becoming "not-false" would earn free credit on 75 of 105 cases.
     unparsed: bool = False
+    # The reply hit the token ceiling, so there was no answer to parse. A DIFFERENT
+    # failure from `unparsed` and separated from it on purpose: `unparsed` says the
+    # model answered something unreadable, `truncated` says the harness did not let it
+    # answer. Folding the second into the first is how a budget mistake gets reported
+    # as a judge with no signal. Counted, warned about, and never silent.
+    truncated: bool = False
+    stop_reason: str | None = None
     cached: bool = False
     # What the provider said it billed, when there was a provider. None for the free
     # judges, and None for a reply cached before this field existed. Kept so the
@@ -257,14 +278,31 @@ def _parse(text: str) -> tuple[bool | None, str | None, str | None, str, bool]:
 
 
 class AnthropicJudge:
-    """The model arm. Temperature 0, and every reply cached to disk.
+    """The model arm. Every reply cached to disk, and no sampling controls at all.
+
+    There is no `temperature=0` here, and that is not an oversight. This first ran
+    against `anthropic` 1.7.0, whose `Messages.create` does not accept `temperature`:
+    that generation of the API dropped the sampling knobs, and what replaced them
+    (`output_config`) governs effort and response format rather than randomness. The
+    call carried `temperature=0` for as long as it did only because every test here
+    drove it through a stub whose `create(**kwargs)` accepted anything -- so the one
+    argument the real SDK would reject was the one nothing checked. A fake more
+    permissive than the interface it stands in for cannot fail. See
+    `TestTheCallMatchesTheInstalledSDK` in `tests/test_judge_scoring.py`.
+
+    Losing temperature costs this harness nothing, because it never had determinism
+    to lose: temperature 0 was never a promise of an identical reply. The disk cache
+    was always the reproducibility mechanism rather than a speed-up, and it is now
+    the only one. Without it a re-run months later would quietly produce a slightly
+    different headline number, indistinguishable from a real change.
 
     The cache is keyed by a hash of the rendered context, the prompt and the model
-    rather than by `example_id`, so changing any of them re-asks instead of serving
-    an answer from a harness that no longer exists. Temperature 0 does not make the
-    API deterministic, which is exactly why the cache is on disk: without it, a
-    re-run months later would silently produce a slightly different headline number
-    and there would be no way to tell that from a real change.
+    rather than by `example_id`, so changing any of those re-asks instead of serving
+    an answer from a harness that no longer exists. The key does NOT cover the rest
+    of the request, so a later change to the call shape -- an `output_config.format`
+    that forces valid JSON, say -- would serve pre-change replies until the key grows
+    to include it. Not a problem today because the cache was empty when temperature
+    came out, and recorded here so that stays a decision rather than a surprise.
 
     The SDK is imported inside `__init__`, so the module imports and the whole
     harness tests with no `anthropic` installed and no key set.
@@ -276,13 +314,21 @@ class AnthropicJudge:
         model: str = DEFAULT_JUDGE_MODEL,
         cache_dir: Path | None = None,
         max_tokens: int = DEFAULT_MAX_TOKENS,
+        effort: str | None = None,
         system: str = SYSTEM_PROMPT,
         client=None,
     ) -> None:
         self.model = model
         self.system = system
         self.max_tokens = max_tokens
-        self.name = f"model:{model}"
+        # None means "whatever the API does by default", which is what the first run
+        # measured. Left unset rather than pinned to a value, because a default is the
+        # honest thing to report a judge's behaviour at -- and because the one
+        # measurement of `low` came back with a generic answer where the default named
+        # the two specific symbols it had checked. That is a real dimension to sweep,
+        # not a setting to quietly choose: see the plan file.
+        self.effort = effort
+        self.name = f"model:{model}" + (f"({effort})" if effort else "")
         self.cache_dir = cache_dir
         if cache_dir is not None:
             cache_dir.mkdir(parents=True, exist_ok=True)
@@ -327,18 +373,34 @@ class AnthropicJudge:
             return None
         return self.cache_dir / f"{key}.json"
 
+    def _request(self) -> dict:
+        """The call, minus the per-case parts. Also what goes into the cache key.
+
+        Built in one place and used twice, so the request that was sent and the request
+        the key was computed from cannot disagree. `effort` is omitted rather than sent
+        as None, so that an unset effort hashes to the same key it did before the option
+        existed and does not invalidate a cache for a setting nobody chose.
+        """
+        request: dict = {"max_tokens": self.max_tokens}
+        if self.effort is not None:
+            request["output_config"] = {"effort": self.effort}
+        return request
+
     def judge(self, context: JudgeContext) -> Judgement:
         prompt = render(context)
-        key = context_hash(context, self.system, self.model)
+        request = self._request()
+        key = context_hash(context, self.system, self.model, request=request)
         path = self._cache_path(key)
         if path is not None and path.exists():
             payload = json.loads(path.read_text(encoding="utf-8"))
             raw = payload["text"]
             answer, claim, code, reason, unparsed = _parse(raw)
+            stop_reason = payload.get("stop_reason")
             return Judgement(
                 example_id=context.example_id, arm=context.arm, judge=self.name,
                 answer=answer, claim=claim, code=code, reason=reason,
                 unparsed=unparsed, cached=True,
+                truncated=stop_reason == "max_tokens", stop_reason=stop_reason,
                 # `.get`, because entries written before usage was recorded have no
                 # such key. Absent is reported as unknown, never as zero -- a missing
                 # count summed as zero would make a cached run look free.
@@ -346,27 +408,41 @@ class AnthropicJudge:
                 output_tokens=payload.get("output_tokens"),
             )
 
+        # Every argument here is accepted by the installed SDK's signature, asserted
+        # against it in the tests, because a stub client accepts arguments the API does
+        # not. Nothing sampling-related is sent; see the class docstring.
         response = self._client.messages.create(
             model=self.model,
-            max_tokens=self.max_tokens,
-            temperature=0,
             system=self.system,
             messages=[{"role": "user", "content": prompt}],
+            **request,
         )
+        blocks = list(getattr(response, "content", []) or [])
+        kinds = [getattr(block, "type", "?") for block in blocks]
         raw = "".join(
-            block.text for block in response.content if getattr(block, "type", "") == "text"
+            block.text for block in blocks if getattr(block, "type", "") == "text"
         )
+        stop_reason = getattr(response, "stop_reason", None)
         usage = getattr(response, "usage", None)
         billed_in = getattr(usage, "input_tokens", None)
         billed_out = getattr(usage, "output_tokens", None)
         if path is not None:
             # Written before parsing, so a reply that will not parse is on disk to be
-            # read by hand. An unparsed reply is the most informative failure here and
-            # the easiest one to lose.
+            # read by hand -- the most informative failure here and the easiest to lose.
+            #
+            # `stop_reason` and `blocks` are recorded because for 16 replies this file
+            # held `"text": ""` and nothing else, and an empty string is the one value
+            # that explains nothing: a refusal, a network oddity and a budget exhausted
+            # by reasoning all look identical. They were in fact a single `thinking`
+            # block and `stop_reason: max_tokens`, which is diagnosable in one glance
+            # and was thrown away by filtering the response before recording it. The
+            # raw reply is what gets kept; `text` is a view of it.
             path.write_text(
                 json.dumps(
                     {
                         "key": key, "model": self.model, "text": raw,
+                        "blocks": kinds, "stop_reason": stop_reason,
+                        "request": request,
                         "input_tokens": billed_in, "output_tokens": billed_out,
                     },
                     indent=2,
@@ -374,8 +450,17 @@ class AnthropicJudge:
                 encoding="utf-8",
             )
         answer, claim, code, reason, unparsed = _parse(raw)
+        if stop_reason == "max_tokens":
+            # Said in the reason field too, not just counted, because this is the line a
+            # reader sees next to the case when they go looking for why it abstained.
+            reason = (
+                f"TRUNCATED: the reply hit the {self.max_tokens}-token ceiling "
+                f"(blocks: {', '.join(kinds) or 'none'}). This is a harness failure, "
+                "not an abstention -- raise --max-tokens and re-run."
+            )
         return Judgement(
             example_id=context.example_id, arm=context.arm, judge=self.name,
             answer=answer, claim=claim, code=code, reason=reason, unparsed=unparsed,
+            truncated=stop_reason == "max_tokens", stop_reason=stop_reason,
             input_tokens=billed_in, output_tokens=billed_out,
         )

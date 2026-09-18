@@ -61,16 +61,24 @@ NULL_TRIALS = 200
 # largest effect stage 3 is looking for.
 MIN_CELL = 10
 
-# Characters per token, for estimating a run's size before paying for it. A heuristic
-# and labelled as one everywhere it surfaces: the true count depends on a tokeniser
-# this package does not ship, and these prompts are source code and reStructuredText
-# rather than English, which tokenises worse than the usual 4.0 rule of thumb.
+# Characters per token, for estimating a run's size before paying for it. Now MEASURED
+# rather than reasoned about: the first real oracle arm was billed 231,262 input tokens
+# for 643,434 characters, which is 2.78 -- so the 3.6 guessed here under-read that run by
+# 22.7%, on top of the 11% the omitted system prompt had already cost. Both errors ran in
+# the cheap-looking direction, which is the direction an estimate must not be wrong in,
+# and both were invisible until something printed the bill next to the guess.
+#
+# 2.7 rather than 2.78, deliberately: rounding down raises the estimate, and over-reading
+# a bill is a surprise nobody minds. It is still a heuristic and still labelled as one
+# everywhere it surfaces -- the true count needs a tokeniser this package does not ship,
+# and these prompts are source code and reStructuredText, which tokenise far worse than
+# the 4.0 rule of thumb written for English.
 #
 # The estimate is deliberately reported in TOKENS and not in dollars. A price is a
 # claim about the world that goes stale silently and would sit in this file being wrong
 # -- which is the failure mode the whole project is about, so hardcoding a rate here
 # would be embarrassing. Token counts are a measurement of the prompts on disk.
-CHARS_PER_TOKEN = 3.6
+CHARS_PER_TOKEN = 2.7
 
 
 def estimate_spend(
@@ -88,9 +96,14 @@ def estimate_spend(
     of the 45 calls. An estimate wrong in the cheap-looking direction is worse than no
     estimate, so the signature refuses to let a caller forget it.
 
-    `output_tokens_high` is `max_tokens` per case -- an upper bound, not a guess.
-    Replies are a few hundred tokens of JSON in practice, so a run that approaches this
-    bound is one where the model is not answering in the requested shape.
+    `output_tokens_high` is `max_tokens` per case -- an upper bound, not a guess, and a
+    loose one. It used to say here that replies run a few hundred tokens in practice, so
+    a run near the bound meant the model was not answering in the requested shape. That
+    is no longer true and was the reasoning that set the budget too low: reasoning tokens
+    are billed as output, and the largest prompt legitimately spent 4,640 of them to
+    produce a 471-character answer. Measured on the first real arm: 20,736 output tokens
+    against a 31,500 bound, and 11,200 of those were spent on replies that got cut off.
+    Treat the bound as the worst case it is, and read the billed figure next to it.
     """
     per_call_overhead = len(system)
     chars = sum(len(text) + per_call_overhead for text in rendered)
@@ -166,6 +179,12 @@ class Scores:
     fp: int
     fn: int
     tn: int
+    # A subset of `unparsed`: replies that hit the token ceiling, so the model was never
+    # allowed to answer. Tracked separately because it is a harness fault and the rest
+    # of `unparsed` is not, and because a run with any of these is not a result. The
+    # first model run had 16 of 45 and reported F1 0.00 without saying so in the table.
+    # Defaulted, and therefore last: the floors construct `Scores` without it.
+    truncated: int = 0
 
     @property
     def precision(self) -> float:
@@ -209,7 +228,7 @@ def score(cases: list[JudgeCase], judgements: dict[str, Judgement]) -> Scores:
     for "how good is this judge", which is why the case report prints the corpus size
     separately and the results JSON records both.
     """
-    tp = fp = fn = tn = answered = abstained = unparsed = 0
+    tp = fp = fn = tn = answered = abstained = unparsed = truncated = 0
     n = 0
     for case in cases:
         if not case.scoreable:
@@ -220,6 +239,8 @@ def score(cases: list[JudgeCase], judgements: dict[str, Judgement]) -> Scores:
         n += 1
         if found.unparsed:
             unparsed += 1
+        if getattr(found, "truncated", False):
+            truncated += 1
         if found.answer is None:
             abstained += 1
             continue
@@ -234,7 +255,7 @@ def score(cases: list[JudgeCase], judgements: dict[str, Judgement]) -> Scores:
             tn += 1
     return Scores(
         n=n, answered=answered, abstained=abstained, unparsed=unparsed,
-        tp=tp, fp=fp, fn=fn, tn=tn,
+        truncated=truncated, tp=tp, fp=fp, fn=fn, tn=tn,
     )
 
 
@@ -407,10 +428,22 @@ def format_results(
         lines.append(f"--- {name} ---")
 
         got = score(cases, judgements)
-        if got.unparsed:
+        if got.truncated:
+            # Loud, above the numbers, and phrased as a verdict on the run rather than a
+            # note about it. The row underneath is arithmetic on a broken instrument:
+            # the model was cut off before answering, on the longest prompts, which are
+            # also the hard cases -- so the damage is concentrated on the positives and
+            # the F1 it produces is not low, it is meaningless.
             lines.append(
-                f"  WARNING: {got.unparsed} reply/replies could not be parsed as a "
-                "verdict; each was scored as an abstention, not as not-false"
+                f"  NOT A RESULT: {got.truncated} of {got.n} reply/replies hit the "
+                "token ceiling and never answered. Truncation tracks prompt length, so "
+                "these are the hard cases, not a random sample. Raise --max-tokens and "
+                "re-run before reading anything below."
+            )
+        if got.unparsed - got.truncated:
+            lines.append(
+                f"  WARNING: {got.unparsed - got.truncated} reply/replies could not be "
+                "parsed as a verdict; each was scored as an abstention, not as not-false"
             )
 
         matrix = confusion(cases, judgements)
@@ -503,6 +536,10 @@ def to_json(
                 "accuracy_answered": got.accuracy_answered,
                 "abstained": got.abstained,
                 "unparsed": got.unparsed,
+                # In the file as well as on screen: a saved result with this above zero
+                # is not comparable to one without, and a score history that cannot tell
+                # them apart would plot a harness bug as a regression.
+                "truncated": got.truncated,
                 "confusion": {"tp": got.tp, "fp": got.fp, "fn": got.fn, "tn": got.tn},
                 "by_verdict": {
                     k: dict(v) for k, v in confusion(cases, judgements).items()

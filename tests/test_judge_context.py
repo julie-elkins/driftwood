@@ -244,6 +244,49 @@ class TestTruncation:
         assert text == "short" and not was_cut
 
 
+class TestAnsweringIsPossibleAtAll:
+    """The free check that should have run before the first paid one.
+
+    The oracle arm scored the model at F1 0.40 with a 69% abstention rate. That reads as
+    a judge unwilling to commit, and it was not: the abstentions were correct and
+    specific, because the "oracle" code file is the file the FIX COMMIT touched rather
+    than the file the document makes claims about. Median identifier coverage across the
+    45 shape-A cases is 16%, and 0% for five of them. None of that costs an API call to
+    find out, and all of it was measurable before the run.
+    """
+
+    def _context(self, doc: str, code: str) -> JudgeContext:
+        return JudgeContext(
+            example_id="x", repo="r", arm="oracle", doc_path="d.md", doc_text=doc,
+            doc_truncated=False, at_sha="a",
+            code_files=(CodeFile("c.py", code, False, None),), pool_size=1,
+        )
+
+    def test_a_doc_about_the_code_on_screen_scores_high(self):
+        got = self._context(
+            "Call `parse_headers(raw)` which returns a `HeaderDict`.",
+            "class HeaderDict(dict): pass\ndef parse_headers(raw): return HeaderDict()",
+        )
+        assert got.marked_identifier_coverage == 1.0
+
+    def test_a_doc_about_a_file_that_is_not_shown_scores_zero(self):
+        # The real shape of the failure: the doc discusses `Field`, the context carries
+        # the file that defines `ConfigDict`, and the only honest answer is "unclear".
+        got = self._context(
+            "Use `Field(alias=...)` with `AliasChoices` to rename inputs.",
+            "class ConfigDict(TypedDict): populate_by_name: bool",
+        )
+        assert got.marked_identifier_coverage == 0.0
+
+    def test_prose_with_nothing_marked_up_scores_zero_rather_than_dividing_by_nothing(self):
+        # Zero, not 1.0. A doc with no checkable identifiers gives a judge nothing to
+        # check, so scoring it as fully covered would hide exactly the cases where the
+        # warning is most deserved -- and 1.0 is what an empty-set division reads as if
+        # you write the ratio the obvious way round.
+        assert self._context("Design notes and rationale.", "def f(): pass"
+                             ).marked_identifier_coverage == 0.0
+
+
 class TestTheCacheKey:
     def _context(self, **overrides) -> JudgeContext:
         base = dict(
@@ -254,32 +297,66 @@ class TestTheCacheKey:
         base.update(overrides)
         return JudgeContext(**base)  # type: ignore[arg-type]
 
+    REQUEST = {"max_tokens": 6000}
+
     def test_the_same_context_hashes_the_same(self):
-        a = context_hash(self._context(), "prompt", "m")
-        b = context_hash(self._context(), "prompt", "m")
+        a = context_hash(self._context(), "prompt", "m", request=self.REQUEST)
+        b = context_hash(self._context(), "prompt", "m", request=self.REQUEST)
         assert a == b
 
     def test_a_changed_prompt_changes_the_key(self):
         # Otherwise editing the prompt appears to have no effect on the result,
         # because every answer comes back from the cache built under the old one.
-        a = context_hash(self._context(), "prompt one", "m")
-        b = context_hash(self._context(), "prompt two", "m")
+        a = context_hash(self._context(), "prompt one", "m", request=self.REQUEST)
+        b = context_hash(self._context(), "prompt two", "m", request=self.REQUEST)
         assert a != b
 
     def test_a_changed_model_changes_the_key(self):
-        a = context_hash(self._context(), "p", "claude-sonnet-5")
-        b = context_hash(self._context(), "p", "claude-haiku-4-5-20251001")
+        a = context_hash(self._context(), "p", "claude-sonnet-5", request=self.REQUEST)
+        b = context_hash(
+            self._context(), "p", "claude-haiku-4-5-20251001", request=self.REQUEST
+        )
         assert a != b
 
     def test_changed_context_content_changes_the_key(self):
-        a = context_hash(self._context(), "p", "m")
-        b = context_hash(self._context(doc_text="different docs"), "p", "m")
+        a = context_hash(self._context(), "p", "m", request=self.REQUEST)
+        b = context_hash(
+            self._context(doc_text="different docs"), "p", "m", request=self.REQUEST
+        )
         assert a != b
 
     def test_the_arm_changes_the_key(self):
         # The two arms can render identically -- a shape-A case whose oracle file is
         # also retrieval's top hit -- and their answers must still not share a cache
         # entry, because the arm is what the result is reported under.
-        a = context_hash(self._context(arm="oracle"), "p", "m")
-        b = context_hash(self._context(arm="retrieved"), "p", "m")
+        a = context_hash(self._context(arm="oracle"), "p", "m", request=self.REQUEST)
+        b = context_hash(self._context(arm="retrieved"), "p", "m", request=self.REQUEST)
         assert a != b
+
+    def test_a_changed_reply_budget_changes_the_key(self):
+        # The one this class was missing, and the omission had teeth. A 700-token budget
+        # truncated 16 of 45 replies mid-reasoning and cached all 16 as empty answers;
+        # without this, raising the budget would have re-served every one of them
+        # instantly, for free, looking exactly like a fix that changed nothing.
+        a = context_hash(self._context(), "p", "m", request={"max_tokens": 700})
+        b = context_hash(self._context(), "p", "m", request={"max_tokens": 6000})
+        assert a != b
+
+    def test_a_changed_effort_changes_the_key(self):
+        a = context_hash(self._context(), "p", "m", request=self.REQUEST)
+        b = context_hash(
+            self._context(), "p", "m",
+            request={**self.REQUEST, "output_config": {"effort": "low"}},
+        )
+        assert a != b
+
+    def test_the_order_the_request_was_written_in_does_not_matter(self):
+        # Keys are sorted before hashing, so an unrelated refactor of the dict literal
+        # cannot invalidate a cache full of replies that are still perfectly valid.
+        a = context_hash(
+            self._context(), "p", "m", request={"max_tokens": 1, "output_config": {}}
+        )
+        b = context_hash(
+            self._context(), "p", "m", request={"output_config": {}, "max_tokens": 1}
+        )
+        assert a == b

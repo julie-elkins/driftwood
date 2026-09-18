@@ -28,6 +28,7 @@ from driftwood.judge.cli import (
     add_parser,
 )
 from driftwood.judge.evaluate import (
+    CHARS_PER_TOKEN,
     estimate_spend,
     format_spend,
     measured_spend,
@@ -187,16 +188,28 @@ class TestTheEstimateIsCheckedAgainstTheBill:
         assert got["unknown"] == 1
         assert got["input_tokens"] == 0
 
+    # A prompt that the heuristic estimates at exactly 1,000 tokens, derived from the
+    # constant rather than written as 3600. These two tests hardcoded a length that was
+    # only right while CHARS_PER_TOKEN was 3.6, so recalibrating it against a real bill
+    # broke them -- a test coupled to the value of the thing it is measuring with. The
+    # arithmetic is the invariant; 3.6 was not.
+    EXACTLY_1000_TOKENS = "x" * round(1000 * CHARS_PER_TOKEN)
+
     def test_a_measured_run_reports_the_heuristics_error(self):
         judgements = self._judgements(input_tokens=1000, output_tokens=200)
-        # 3600 characters over 3.6 chars/token estimates exactly 1000.
-        rendered = format_spend(estimate_spend(["x" * 3600], system="", max_tokens=700), measured_spend(judgements))
+        rendered = format_spend(
+            estimate_spend([self.EXACTLY_1000_TOKENS], system="", max_tokens=700),
+            measured_spend(judgements),
+        )
         assert "billed: 1,000 input + 200 output" in rendered
         assert "+0.0%" in rendered
 
     def test_an_overestimate_is_reported_as_positive_error(self):
         judgements = self._judgements(input_tokens=500, output_tokens=10)
-        rendered = format_spend(estimate_spend(["x" * 3600], system="", max_tokens=700), measured_spend(judgements))
+        rendered = format_spend(
+            estimate_spend([self.EXACTLY_1000_TOKENS], system="", max_tokens=700),
+            measured_spend(judgements),
+        )
         assert "+100.0%" in rendered
 
     def test_cached_replies_are_called_out(self):

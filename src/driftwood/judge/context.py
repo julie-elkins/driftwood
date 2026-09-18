@@ -37,10 +37,12 @@ module. The diff-shown ceiling arm lives elsewhere and is a diagnostic.
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from ..mining.gitio import list_files, local_name_for, read_blobs
+from ..mining.identifiers import extract, literal_spans
 from ..mining.paths import Kind, classify
 from ..retrieval.rankers import Lexical
 from .cases import JudgeCase
@@ -134,6 +136,33 @@ class JudgeContext:
     def usable(self) -> bool:
         """False when there is nothing to judge against: no doc, or no code."""
         return bool(self.doc_text.strip()) and bool(self.code_files)
+
+    @property
+    def marked_identifier_coverage(self) -> float:
+        """Share of the doc's backticked identifiers that appear in the code shown.
+
+        The cheapest possible check on whether a context can be answered at all, and it
+        should have been here before the first paid run rather than after it. The oracle
+        arm scored the model at F1 0.40 with a 69% abstention rate, which read as a judge
+        with no appetite for committing; the abstentions turned out to be correct and
+        specific -- "the only code file provided is config.py, which defines ConfigDict,
+        not Field". The oracle arm shows the file the FIX COMMIT touched, and this
+        measures how far that is from the file the document is making claims about.
+        Median across the 45 shape-A cases: 16%. It is 0% for 5 of them.
+
+        Not a judgement of the case, and deliberately not a filter. A document can
+        legitimately discuss code in files other than the one on screen, and a low score
+        here is a warning about the CONTEXT, not evidence about the documentation. It
+        exists so that a run whose contexts cannot be answered says so on screen, next
+        to the estimate, before anything is charged for.
+        """
+        marked = extract(literal_spans(self.doc_text), versions=False)
+        if not marked:
+            return 0.0
+        present: set[str] = set()
+        for code in self.code_files:
+            present |= extract(code.text, versions=False)
+        return len(marked & present) / len(marked)
 
 
 class ContextBuilder:
@@ -292,16 +321,33 @@ def render(context: JudgeContext) -> str:
     return "\n".join(parts)
 
 
-def context_hash(context: JudgeContext, prompt: str, model: str) -> str:
+def context_hash(
+    context: JudgeContext, prompt: str, model: str, *, request: Mapping[str, object]
+) -> str:
     """Cache key for a judgement: everything that could change the answer.
 
     Keyed on the rendered content rather than on `example_id`, so editing the prompt
-    or the budgets invalidates the cache instead of serving answers from a harness
-    that no longer exists. Getting this wrong is expensive in a way that looks free:
-    stale hits would make a prompt change appear to have no effect.
+    invalidates the cache instead of serving answers from a harness that no longer
+    exists. Getting this wrong is expensive in a way that looks free: a stale hit makes
+    a change appear to have had no effect.
+
+    `request` is the rest of the call -- the reply budget, the effort setting -- and it
+    is required, keyword-only, and the reason this docstring is longer than the
+    function. It was missing, while the sentence above used to claim the key covered
+    "the prompt or the budgets". It did not cover the budgets. A 700-token reply budget
+    truncated 16 of 45 replies mid-reasoning, each was cached as an empty answer, and
+    the fix -- a larger budget -- would have served all 16 truncations straight back
+    with no call made, no charge, and nothing on screen to suggest the new budget had
+    not been tried. A false claim about the code, in the docstring of a tool for
+    finding false claims about code. The signature is now shaped so that a caller
+    cannot forget the argument, which is the only version of this that stays true.
     """
     digest = hashlib.blake2b(digest_size=16)
-    for piece in (model, prompt, context.arm, render(context)):
+    pieces = [model, prompt, context.arm, render(context)]
+    # Sorted by key, so the same request written in a different order is the same hash
+    # -- otherwise the invalidation this exists for would fire at random.
+    pieces += [f"{name}={request[name]!r}" for name in sorted(request)]
+    for piece in pieces:
         digest.update(piece.encode("utf-8", "replace"))
         digest.update(b"\x00")
     return digest.hexdigest()
