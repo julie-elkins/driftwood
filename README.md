@@ -219,6 +219,423 @@ Other limits, stated rather than buried:
   occurrences across 2134 shape-A positives before being fixed; the stoplists are now
   ASCII-clean.
 
+## Stage 2: retrieval, and what a shuffled ranking is for
+
+The mined pairs are relevance judgements: a doc and a code file that co-changed while sharing an
+identifier is a human-confirmed statement that the doc makes a claim about that code. So the
+question "given a documentation file, can we find the code it is about?" has 1025 judged queries
+without anybody labelling anything new. That is the retrieval step the pipeline needs — an agent
+holding a doc claim has to fetch the code to check it against.
+
+Three arms, none of them a model. `path` matches filename tokens. `lexical` ranks by IDF-weighted
+identifier overlap. `shuffle` ranks at random, forty times, and is the reason the other two are
+readable at all:
+
+```
+repo                ranker            pool~    n    R@1    R@5   R@10    MRR
+encode/httpx        shuffle (floor)      24  148   0.04   0.20   0.41   0.25
+encode/httpx        path                 24  148   0.03   0.34   0.58   0.27
+encode/httpx        lexical-ablated      24  148   0.26   0.59   0.82   0.67
+pallets/flask       shuffle (floor)      35  396   0.04   0.20   0.36   0.19
+pallets/flask       path                 35  396   0.09   0.14   0.34   0.19
+pallets/flask       lexical-ablated      35  396   0.36   0.66   0.82   0.66
+pydantic/pydantic   shuffle (floor)     101  346   0.01   0.05   0.11   0.10
+pydantic/pydantic   path                101  346   0.13   0.18   0.25   0.31
+pydantic/pydantic   lexical-ablated     101  346   0.18   0.40   0.57   0.47
+fastapi/fastapi     shuffle (floor)     685   82   0.00   0.01   0.01   0.02
+fastapi/fastapi     path                685   82   0.09   0.25   0.28   0.21
+fastapi/fastapi     lexical-ablated     685   82   0.28   0.49   0.61   0.45
+```
+
+**A shuffled ranking scores recall@10 = 0.41 on `encode/httpx`.** Its candidate pool is 24 files
+and a query has several right answers, so drawing ten at random finds one about half the time.
+The first version of the lexical ranker scored 0.25 there — *below chance* — and without the
+shuffle arm that would have been written down as "25% recall@10", a number with a percent sign
+on it and nothing wrong with it on its face. The floor is per repo and computed on each query's
+own pool, because a 24-file haystack and a 685-file haystack are not the same measurement and a
+mean across them describes the corpus rather than the ranker.
+
+The trial spread does the second job. Forty shuffles on flask give recall@10 between 0.32 and
+0.40; that range is the noise floor of the metric on this data, so a gain smaller than it has
+not been shown to be a gain. It is the same discipline as putting a Wilson interval on a
+precision figure instead of quoting the point estimate.
+
+**`path` is not shown to work on two of five repos.** On flask it lands at 0.34 against a 0.36
+floor and its MRR exactly equals the floor's; on `psf/requests` it sits inside the noise range.
+It earns its keep on fastapi and pydantic, whose docs mirror their module layout. One baseline,
+two opposite verdicts, and only the per-repo breakdown shows it.
+
+### The number that was too good, and the ablation that priced it
+
+`lexical` reaching recall@10 = 0.85 should not be believed on sight, because the ground truth
+was **mined using identifier overlap** and this ranker scores by identifier overlap. The labels
+were selected for the signal being tested. That is structurally the same error as quoting a
+retention figure computed on the cases its filter was designed against, which this project has
+now done three times.
+
+It is also, unusually, testable: every record names the identifiers the miner accepted as its
+reason, so the eval runs a fourth arm with exactly those tokens struck out of the query — the
+same ranker, the same tree, the same IDF, a strictly harder task.
+
+```
+                    lexical   ablated
+encode/httpx  R@10     0.86      0.82
+pallets/flask R@10     0.85      0.82
+psf/requests  R@10     0.81      0.76
+fastapi       R@10     0.63      0.61
+```
+
+Two to five points. The circularity is real and small, and **this is the first time in the
+project that a suspected fitted number came back mostly clean once it was actually priced.**
+Every figure quoted above is the ablated one.
+
+What the ablation does *not* cover, stated plainly: it removes the specific tokens the miner
+matched on, not the selection effect. Shape A picks doc/code pairs that were lexically related
+enough to share a changed identifier, so the whole *population* of queries may be easier than a
+random doc/code relation is. Settling that needs relevance judgements produced without lexical
+overlap — hand-labelled doc→code pairs — and that has not been done, so no claim is made here
+about performance on docs the miner would never have paired.
+
+The strongest evidence is fastapi's, and for a reason worth noticing: its floor is 0.01, so
+recall@10 = 0.61 on a 685-file pool is a 60x lift, where httpx's headline 0.82 is a 2x lift over
+a floor of 0.41. The largest haystack produces the least impressive number and the most
+convincing one.
+
+### Two design decisions that cost more than they look
+
+**Each query is scored on the tree its judgement was made at**, not on one recent sha per repo.
+The recent-sha version was written first and was cheaper. It cost 64% of flask's judged pairs and
+30 of requests' 36, because both projects moved to a `src/` layout inside the mining window and
+`requests/adapters.py` is not a path that exists any more. That loss is not attrition — it
+deletes exactly the core library modules and keeps `setup.py` and `docs/conf.py`, leaving a
+sample biased toward the odd pairs while still reporting a confident number. Scoring at the
+judged sha loses nothing: `lost = 0` for all five repos, and the corpus went from 127 queries
+to 1025.
+
+Following the renames instead was tried and rejected, and the reason is a good one. `git diff -M`
+between the two trees returns three renames for `psf/requests`, of which two are wrong:
+
+```
+R100  requests/packages/urllib3/contrib/__init__.py  ->  tests/testserver/__init__.py
+R100  docs/dev/internals.rst                         ->  src/requests/py.typed
+```
+
+Both pairs are near-empty files, so git's similarity scoring rates them identical. It never found
+the real module moves. A remap built from that would have scored a documentation file against
+`py.typed`, at 100% confidence, silently, forever.
+
+**`path`'s first version was confidently wrong rather than weak**, and the difference matters.
+It matched any shared path token, directory names included. Every flask doc lives under `docs/`,
+most flask doc paths reduce to that one token once pieces under four characters are dropped
+(`docs/api.rst` → `{docs}`), and `docs/conf.py` is the shortest pool path sharing it — so the
+length normaliser gave `docs/conf.py` rank 1 for **388 of 396 flask queries**. A shared token now
+has to involve at least one of the two filenames, on the general ground that a directory both
+files merely sit in says nothing about *which* file. Fixing it moved fastapi's MRR from 0.15 to
+0.21 and left flask at the floor — so flask's verdict survived the correction, but a broken
+baseline understates the bar every later model has to clear, which is the entire reason for
+measuring a baseline.
+
+## Stage 2b: the embedding arm lost to the free baseline, five repos out of five
+
+The result first, because it is the interesting part. `dense-ablated` against
+`lexical-ablated` — the two comparable rows — on `BAAI/bge-small-en-v1.5`, chunked 1600/200,
+max-pooled over chunk pairs:
+
+| repo | pool~ | n | dense R@10 | lexical R@10 | dense MRR | lexical MRR |
+|---|---|---|---|---|---|---|
+| encode/httpx | 24 | 148 | 0.77 | **0.82** | 0.50 | **0.67** |
+| fastapi/fastapi | 685 | 82 | 0.52 | **0.61** | 0.39 | **0.45** |
+| pallets/flask | 35 | 396 | 0.76 | **0.82** | 0.56 | **0.66** |
+| psf/requests | 23 | 53 | 0.62 | **0.76** | 0.30 | **0.37** |
+| pydantic/pydantic | 101 | 346 | 0.35 | **0.57** | 0.30 | **0.47** |
+
+The dense arm works — fastapi's 0.52 R@10 on a 685-file pool against a shuffled floor of 0.01 is
+real retrieval, not noise. It simply loses to IDF-weighted token overlap with no dependencies, on
+every repo, on both metrics.
+
+**Two-thirds of that is not individually readable, and saying so is the point.** Compared against
+each repo's own noise range, only pydantic (0.22 gap vs 0.06 spread) and fastapi (0.09 vs 0.04)
+show a loss larger than the metric's noise on this dataset; httpx, flask and requests are all
+inside it. What carries the conclusion is not any single repo but that the direction is consistent
+**five for five**, which a sign test puts at p ≈ 0.03. Three of these repos, reported alone, would
+be "not shown".
+
+**The comparison that was pre-registered and then not made.** pydantic's dense arm falls 0.47 →
+0.35 R@10 under ablation where lexical only falls 0.59 → 0.57, which looks like the dense arm
+leaning far harder on the miner's own evidence tokens. That inference is unavailable, and it was
+written down as unavailable *before* the run: the dense ablation redacts words from text, the
+lexical one subtracts tokens from a set, and deleting `HTTPTransport` perturbs the sentence around
+it. A harsher intervention producing a larger drop is not evidence of more circularity.
+
+### Worse overall is not the same as useless, so that was measured too
+
+A ranker can lose on average and still be right about cases the winner misses — that is the whole
+premise of hybrid retrieval. `scripts/complementarity.py` tests it as hit@10 per query, both arms
+ablated:
+
+```
+repo                    n  both lex only dense only neither  lex@10  union  lex@20 union wins
+encode/httpx          148   133        7          1       7    0.95   0.95    0.99         no
+fastapi/fastapi        82    49       10          6      17    0.72   0.79    0.80         no
+pallets/flask         396   332       24         10      30    0.90   0.92    0.96         no
+psf/requests           53    35        7          2       9    0.79   0.83    0.96         no
+pydantic/pydantic     346   179       82         14      71    0.75   0.79    0.85         no
+```
+
+Dense does find queries lexical misses — 1 to 14 per repo, and a union of the two top-10s lifts
+hit@10 by 1 to 7 points. **That lift is an artefact of the budget, not a property of the ranker,
+and the last column is the control that shows it.** A union of two top-10s inspects twenty files,
+so the honest comparison is not lexical@10 but *lexical@20* — the other thing the same budget
+buys. Lexical@20 wins on all five repos, `psf/requests` by 0.96 to 0.83. More lexical results are
+worth more than dense results, so the dense arm does not earn its half of the candidate budget
+either.
+
+Without that control every second ranker that is not actively harmful shows a lift, and the lift
+is the budget. It is the same failure the shuffled floor exists to catch, one level up: a number
+that goes up for a reason that has nothing to do with the thing being tested.
+
+### What this does and does not license saying
+
+It does **not** show that embeddings lose at doc→code retrieval. The ground truth is shape-A
+mined pairs, and shape A only ever proposes a doc and a code file **that already share an
+identifier** — so the corpus is selected for precisely the signal the lexical ranker consumes.
+The dense arm is being asked to win on the other arm's home ground. The already-documented weak
+ablation is the same limit seen from the other side: striking evidence tokens bounds one
+circularity channel and cannot touch the selection effect.
+
+So the finding is narrow and real: **on identifier-overlap-selected ground truth, a 384-dim
+general-purpose text encoder is not worth its dependencies.** Testing the embedding hypothesis
+needs ground truth this mining rule did not select — a ground-truth problem, not a modelling one,
+and the reason stage 2c sits ahead of `bge-m3` in the roadmap. Buying a model 17x the size to win
+on a corpus built around the competitor's strength would answer a question nobody asked.
+
+Stage 2c has since built that ground truth and scored it. **It half-confirms this section and
+half-contradicts it**, which is written up below rather than folded into the numbers above.
+
+### The design, and the measurement that set it before any model was installed
+
+Everything below was settled before the numbers above existed, and each choice would have gone
+the other way by default.
+
+**The default design does not survive the corpus.** Embed each file, embed the doc, take a
+cosine — that requires both to fit in the encoder's window, and neither does. Code files have a
+median of 7.9k characters and a 90th percentile of 47k; 17% exceed roughly 8k tokens and the
+largest is 396k characters. Docs are no smaller: median 11.6k characters, with 94% over 2000. So
+something has to give, and the two candidates are truncate or chunk.
+
+**Truncation was priced with the free ranker, before committing to either.** `Lexical` can be
+handed a shortened file just as easily as a model can, so the cost of a truncating design was
+measurable for the price of two extra eval runs:
+
+```
+MRR, ablated       full   8000 chars   2000 chars (~512 tokens)
+encode/httpx       0.67         0.51         0.45
+pallets/flask      0.66         0.52         0.36
+pydantic/pydantic  0.47         0.38         0.30
+psf/requests       0.37         0.25         0.20
+fastapi/fastapi    0.45         0.33         0.34
+```
+
+**A third to a half of the retrieval signal is not in the first 512 tokens of a code file.** A
+truncating dense arm would therefore start handicapped below the free baseline, and would lose
+for a reason that has nothing to do with embeddings — the experiment would run, produce a number,
+and answer a different question than the one asked. So both sides are chunked at 1600 characters
+with 200 of overlap, and nothing is dropped. The overlap is what keeps a definition that lands on
+a window boundary intact *somewhere*, a loss that is otherwise invisible in the score.
+
+That measurement is now a regression test rather than a paragraph:
+`test_a_match_at_the_end_of_a_long_file_still_ranks_first` fails if someone later optimises this
+by embedding only the head.
+
+**Scoring is max over (doc chunk, code chunk) pairs — two maxes, no mean.** Justified by what a
+positive actually *is* here: the doc makes one claim, about one function, in one file. Mean-pooling
+either side averages that against every unrelated paragraph in a 12k-character document and every
+unrelated method in a 47k-character module, diluting the exact localised match the label is about.
+This is late interaction at chunk granularity rather than token granularity — ColBERT's MaxSim
+reasoning, done coarsely because the vectors have to fit in memory on a laptop. The cost is
+recorded: a file that merely *mentions* the right symbol once scores as highly as one built around
+it. Term frequency has the same weakness in `Lexical`, and it is written down in both places.
+
+**The cache is keyed on content, and stamped.** Queries are scored at the tree their judgement was
+made at, which means 629 distinct trees — but only 8148 unique code blobs behind them, because most
+files are byte-identical from one sha to the next. A path-keyed cache would miss nearly every one of
+those hits and turn minutes into hours. The subtler half is the stamp: the model id and the chunking
+parameters are folded into the key *and* written into the file, and a mismatch refuses to load.
+Changing the chunk size changes no shape, no column and no schema, so a cache that ignored it would
+keep serving vectors built under the old windows and the run would look entirely clean. Cosines
+between two different encodings are finite, plausible and meaningless, and nothing downstream can
+detect them — refusing is the only safe behaviour.
+
+**The dense ablation redacts text; the lexical one subtracts tokens. These are not the same
+operation.** `Lexical` can remove the mined evidence tokens exactly, because it consumes tokens.
+A model consumes text, so the only available analogue is deleting the words — which perturbs the
+sentence around them too. The dense ablation is therefore *strictly harsher* than the lexical one,
+and **a wider dense gap is not by itself evidence of more circularity.** This is written here, in
+the module docstring, and in the eval's own output, because the two gaps will be printed in
+adjacent rows and that invites exactly the wrong inference.
+
+**The bar was `lexical-ablated` per repo, not the shuffled floor**, and it was set in writing
+before the run. Beating a shuffled ranking is not an achievement — `path` failed to do it on two
+repos, but a free tokeniser clears it comfortably. Naming fastapi's 0.61 R@10 in advance is what
+makes the result above a finding rather than a disappointment: had the bar been the floor, the
+dense arm's 0.52 against 0.01 would have been written up as a success.
+
+The whole arm is an optional extra (`uv sync --extra embed`), so stages 1 and 2 stay regenerable
+in CI years from now without resolving an inference stack.
+
+## Stage 2c: the ground truth the 5/5 result needs, and the plan it falsified
+
+The 2b loss is confounded with how the corpus was built. Shape A proposes a doc/code pair only
+when the two already share an identifier, so the ground truth is selected for exactly the signal
+`Lexical` scores with, and "embeddings lose at doc→code retrieval" is not a claim that measurement
+supports. Stage 2c builds judgements that rule never touched: **documents read by a person, with
+the repository's whole code pool as the candidate list.**
+
+18 documents were sampled and labelled by hand. **The result splits: the MRR ordering survives,
+the recall ordering reverses, and neither is readable at this sample size.** Details below the
+design, because the design is what makes the numbers mean anything.
+
+**The stage as first specified does not exist, and the check that showed it took four minutes.**
+The roadmap line above used to read "hand-labelled pairs sharing no identifier." Across the 2135
+pairs already judged, that population is **2 pairs** — 0 of 343 in httpx, 0 of 180 in fastapi,
+0 of 727 in flask, 0 of 75 in requests, 2 of 810 in pydantic — with a median pair sharing 18 to
+65 identifiers. At file granularity a 10k-character document and a 5k-character module share
+tokens regardless of what either is about. So overlap is not a usable partition here, and the
+answerable question is not *pairs with no overlap* but **pairs no overlap rule selected**.
+
+### Who proposes the candidates decides the answer
+
+Two cheaper designs were rejected, and the reasons are the design:
+
+- **Label a ranker's top 10.** This measures whether that ranker's suggestions are good. A pair
+  the dense arm finds and the lexical arm misses can never enter the corpus, so whichever ranker
+  generates the candidates wins the evaluation it is then graded by.
+- **Label random pairs.** Unbiased and unaffordable: pools run 22 to 685 files with a handful
+  relevant, a positive rate near 1%, so thirty judgements would return roughly zero positives.
+
+The unit of judgement is therefore the **document**, and the candidate set is the repository tree
+— which has no opinion. Every pair either ranker could return is reachable, including pairs
+neither one ranks.
+
+### Four decisions in the sheet itself
+
+18 documents, six each from httpx, requests and flask, sampled uniformly at a recorded seed from
+one pinned tree per repo.
+
+- **`NONE` is an answer, and it is distinct from an unmarked case.** A doc that makes no claim
+  about any specific module is a real judgement. Both have zero ticked files, and scoring an
+  unmarked case as "about nothing" would add a query every ranker necessarily loses — dragging
+  recall down by an amount set by what the sample happened to draw, and reporting it as a fact
+  about the rankers.
+- **A freehand `EXTRA:` line**, so the checklist cannot cap the answer at what was listed.
+- **The sample is a shuffled prefix, not `random.sample`.** Equally uniform, but nested: at the
+  same seed, nine documents per repo contains every one that six chose. Sheets get extended when
+  `NONE` turns out common, and a redraw would strand judgements already made. What that does not
+  license is drawing twice and reporting the nicer answer — extending is only sound because every
+  drawn case is labelled and counted, so the stopping rule is a query count fixed in advance.
+- **Both the documents and the entire code pool are written to disk.** The clones are bare, so
+  there is no working tree to open, and "does this document make a claim about this module" is
+  usually not answerable from the document alone.
+
+### No ablation here, and that is correct rather than missing
+
+The ablation arm exists to bound circularity injected by the mining rule — it strikes the tokens
+that caused a pair to be proposed. These pairs were proposed by a person reading prose, so there
+is no such channel and nothing to strike. Every query carries empty evidence, pinned by a test,
+and the ablated rows are dropped from the output rather than printed as byte-identical copies of
+their unablated twins. A duplicated row in a results table reads as a measurement that was made.
+**The 2c rows are compared against the *ablated* rows of the 2b table.**
+
+### The result: 18 documents, 14 scoreable queries, a split verdict
+
+All 18 cases were answered. **Four were marked `NONE`** — requests' `install.rst`,
+`contributing.rst` and `community/recommended.rst`, and flask's `patterns/mongoengine.rst`:
+installation guides, contribution process, and a third-party integration recipe, all of which make
+claims about the world outside the tree rather than about a module in it. That is 22% of the
+sample, which is the whole argument for `NONE` being a first-class answer — scored as queries they
+would have pulled every ranker's recall down by a quantity set by the draw.
+
+| repo | n | ranker | R@1 | R@5 | R@10 | MRR |
+|---|---|---|---|---|---|---|
+| encode/httpx | 6 | shuffle (floor) | 0.05 | 0.22 | 0.46 | 0.38 |
+| | | *noise range* | *0.00–0.21* | *0.09–0.40* | *0.28–0.63* | *0.18–0.57* |
+| | | path | 0.00 | 0.53 | 0.70 | 0.27 |
+| | | lexical | 0.15 | **0.70** | 0.94 | **0.81** |
+| | | dense | 0.15 | 0.64 | **0.96** | 0.76 |
+| pallets/flask | 5 | shuffle (floor) | 0.03 | 0.14 | 0.28 | 0.31 |
+| | | *noise range* | *0.00–0.15* | *0.03–0.35* | *0.13–0.54* | *0.12–0.60* |
+| | | path | 0.08 | 0.08 | 0.08 | 0.43 |
+| | | lexical | **0.17** | **0.49** | 0.68 | **0.82** |
+| | | dense | 0.12 | 0.44 | **0.78** | 0.73 |
+| psf/requests | 3 | shuffle (floor) | 0.06 | 0.24 | 0.47 | 0.39 |
+| | | *noise range* | *0.00–0.17* | *0.00–0.58* | *0.17–0.83* | *0.10–0.72* |
+| | | path | 0.00 | 0.08 | 0.42 | 0.17 |
+| | | lexical | **0.33** | **0.83** | **0.92** | **1.00** |
+| | | dense | 0.08 | 0.50 | 0.83 | 0.49 |
+
+**On MRR the 2b direction survives: lexical wins 3 of 3.** Where the first correct answer lands is
+the metric the pipeline actually spends money on, and on ground truth no overlap rule selected,
+IDF-weighted token overlap still puts it earlier than a 384-dim encoder. The 5/5 result was
+therefore not purely a selection artefact — which is the one thing 2c was built to find out.
+
+**On recall@10 it reverses: dense wins 2 of 3** (httpx 0.96 vs 0.94, flask 0.78 vs 0.68), having
+lost 3 of 3 on these same repos in 2b. Dense *finds* relevant files that lexical does not and
+*orders* them worse — the same find-but-don't-rank pattern `scripts/complementarity.py` measured
+independently, arrived at here from a different corpus and a different metric.
+
+**Nothing in the table is individually readable, and the per-query view says why.** Every
+dense-vs-lexical gap sits inside its repo's noise range; the widest, requests' 0.51 MRR, is inside
+a 0.62-wide range. Decomposed to the 14 queries, **8 are ties at MRR 1.00** — both rankers put a
+relevant file first, so the task as sampled is easy and the entire difference lives in 6 documents.
+Paired per query: lexical takes MRR 5–1, dense takes R@10 5–2. Sign tests give p ≈ 0.11 and
+p ≈ 0.23; the repo-level 3/3 on MRR gives p ≈ 0.125. **This is a direction, not a result.** And
+requests' MRR gap is one document — `community/faq.rst`, where lexical scores 1.00 and dense 0.12.
+One doc out of three carrying a repo's headline number is what n=3 looks like from the inside.
+
+**The magnitudes are not comparable across the two corpora, only the orderings.** Lexical's MRR
+here (0.81 / 0.82 / 1.00) towers over its ablated MRR on the mined corpus (0.67 / 0.66 / 0.37),
+and almost none of that is retrieval getting better:
+
+| repo | 2c relevant/query | mined relevant/query | 2c pool~ | mined pool~ |
+|---|---|---|---|---|
+| encode/httpx | 4.00 | 2.32 | 23 | 24 |
+| pallets/flask | 4.40 | 1.84 | 35 | 35 |
+| psf/requests | 3.33 | 1.42 | 22 | 23 |
+
+A person reading a document marks about twice as many files as the miner proposes for it, out of an
+identically-sized pool. Twice as many correct answers makes hitting one at rank 1 roughly twice as
+easy, so MRR rises mechanically; recall@k, needing to cover a doubled denominator, gets *harder*.
+Dense holding roughly its 2b recall against twice the denominator is the quieter half of the
+reversal above. The two corpora differ in ground-truth provenance and in relevant-set size — not
+in pool size, which is the confound that would have been fatal and is the one that is absent.
+
+`path` collapses on flask: R@10 of 0.08 against a floor of 0.28, meaningfully *below chance*. Its
+whole signal is filename-to-filename token overlap, and flask's docs are named for tasks
+(`errorhandling`, `templating`) while its modules are named for structures (`app.py`, `blueprints.py`).
+A bare 0.08 reads as a weak baseline; only the floor shows it is an actively misleading one.
+
+### The limitation, stated because it is not recoverable
+
+**pydantic (267 code files) and fastapi (685) are excluded** — a checklist that long is not a
+usable instrument. Those are the only two repos where the dense loss was individually readable
+against its noise range. 2c could therefore test whether the ordering survives ground truth the
+mining rule did not select, and it did; it **cannot confirm or overturn the readable half of the
+5/5 result**, and the split verdict above must not be read as doing either. The three repos 2c
+covers are exactly the three that 2b already reported as "not shown" individually.
+
+With three to six queries per repo the noise ranges came out 0.35 to 0.62 wide, and that width is
+the finding rather than something to average away. The honest summary of the whole two-stage
+exercise is that **the direction has now been observed on two corpora selected two incompatible
+ways, and has not once been observed at a magnitude larger than its own noise.** Fixing that needs
+more labelled documents, not a better model — which is what makes 2d (a reranker over `lexical`'s
+top 20, scored on both corpora) the next thing worth building and `bge-m3` still not worth buying.
+
+Two silent defects in already-shipped code surfaced the first time the new command printed a
+table, both in the results footer: it named the module's default trial count rather than the
+run's, so a low-trial run claimed forty trials and understated its own noise range; and it
+explained the `lexical-ablated` row whether or not that row existed, implying numbers had been
+bounded for circularity when they had not. Both are now parameterised, gated, and tested.
+
 ## Reproducibility
 
 Every mine writes a manifest next to its output recording each repo's pinned sha, the commit
@@ -319,7 +736,10 @@ label set that predates manifests and therefore cannot be regenerated.
 | stage | state |
 |---|---|
 | 1 · Ground-truth miner + eval harness | **built, measured** |
-| 2 · Retrieval — embeddings, then a cross-encoder reranker, each against a measured baseline | next |
+| 2 · Retrieval — free baselines against a shuffled floor | **built, measured** |
+| 2b · Retrieval — embeddings, chunked and cached | **built, measured, lost 5/5** |
+| 2c · Hand-labelled docs, candidates = the whole tree — the ground truth 2b needs | **built, 18 docs labelled, split verdict** |
+| 2d · Cross-encoder reranker over `lexical`'s top 20, scored on both corpora | next |
 | 3 · Claim typing and verification agents | designed |
 | 4 · Null-run harness — same input twice, to establish the noise floor | designed |
 | 5 · GitHub App + CI eval gate | designed |
@@ -339,6 +759,7 @@ uv run driftwood mine --repos psf/requests pallets/flask --limit 4000 --out data
 uv run driftwood stats --labels data/mine.jsonl
 uv run driftwood sample --labels data/mine.jsonl --shape A -n 25 --out review/batch.md
 uv run driftwood score review/batch.md --labels data/mine.jsonl
+uv run driftwood retrieve-eval data/mine.jsonl --out data/scores/retrieval.json
 uv run pytest
 ```
 
@@ -350,6 +771,47 @@ omitted `--out`, and duly destroyed it. Recovered from git; the guard is the act
 `sample` writes a review sheet a human fills in; `score` reads the verdicts back and reports
 precision per shape and per basis with intervals. `retention` checks how a rebuilt label set
 treats already-judged cases, which is valid for subtractive rule changes only.
+
+`retrieve-eval` needs the clones `mine` left in `.cache/clones`, since it scores each query on
+the tree that query's judgement was made at. It prints the dataset — pool sizes, per-repo
+query concentration, lost positives — before any metric, on the grounds that a recall figure
+without its pool size is not checkable by the person reading it.
+
+The dense arm is off unless a model is named, so everything above runs with no inference stack
+installed:
+
+```
+uv sync --extra embed
+uv run driftwood retrieve-eval data/mine.jsonl --embed-model --out data/scores/dense.json
+uv run python scripts/complementarity.py data/mine.jsonl
+```
+
+`--embed-model` bare means `BAAI/bge-small-en-v1.5`; naming a model instead swaps it, and
+`BAAI/bge-m3` is a one-flag upgrade at roughly 17x the compute — an overnight run rather than a
+different design. Add `--embed-device mps` on Apple silicon.
+
+**Caching is the default and opting out is the flag**, which is the way round that matters here.
+The corpus is 8148 unique code blobs behind 629 trees, so a forgotten cache produces an identical
+table an hour later — a mistake with no symptom except the wait. The path is *derived* from the
+model and the chunking rather than fixed, so switching either one writes a second file instead of
+colliding with the first. The stamp check would catch a collision and refuse, which is safe but
+would make every switch an error cleared by deleting the cache and re-encoding everything; two
+files is the version where the safe path is also the cheap one.
+
+Stage 2c is a separate ground truth with its own two commands:
+
+```
+uv run driftwood doc-sample
+uv run driftwood doc-eval review/2c/SHEET.md --out data/scores/doclabel.json
+```
+
+`doc-sample` writes `review/2c/SHEET.md` plus every sampled document and every candidate code
+file under `review/2c/text/`, because the clones are bare and a reviewer needs to read the code
+to answer. The sheet is handed over with nothing ticked — a judgement suggested by a ranker
+cannot then be used to grade that ranker, and a suggestion from anything else is still an
+anchor. `doc-eval` reads the filled sheet back and scores the same rankers with the same
+shuffled floor, so the only difference between its table and `retrieve-eval`'s is where the
+ground truth came from. Add `--embed-model` to include the dense arm.
 
 ## Licence
 

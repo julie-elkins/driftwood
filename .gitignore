@@ -26,9 +26,19 @@ wheels/
 # ground-truth sheets unattributable.
 data/labels-v*.jsonl
 
+# The stage-2c reading bundle: 98 files, 1.2MB, copied verbatim out of five
+# upstream projects so a reviewer can read them (the clones are bare, so there is
+# no working tree to open). Ignored because it is neither ours nor irreplaceable
+# -- `driftwood doc-sample` regenerates it byte-identically from the trees the
+# sheet itself pins, and vendoring other projects' source into this repo would
+# add their licences to ours for no gain. `review/2c/SHEET.md` is NOT ignored:
+# that one is the ground truth.
+review/2c/text/
+
 # Never ignored, and worth saying why:
 #   review/*.md              -- the hand labels. Irreplaceable; every number
 #                               downstream is measured against them.
+#   review/2c/SHEET.md       -- same, for the hand-labelled retrieval corpus.
 #   data/scores/*.json       -- the measurement history. A result is data, not
 #                               console output.
 #   data/*.manifest.json     -- what makes the ignored files above regenerable.
