@@ -14,7 +14,7 @@ is unreliable, this README says so.
 
 ---
 
-## The part worth reading: two predictions, both wrong
+## The part worth reading: three rounds, wrong three different ways
 
 Drift labels are mined from git history. When a human commit corrects documentation, the
 tree immediately *before* that commit contained documentation that was false, and a human
@@ -28,14 +28,15 @@ measuring:
 - **Shape B — doc-only fix.** A commit modifies documentation and touches no code at all.
   The code did not move, so whatever was corrected was already false.
 
-Shape B looked obviously cleaner on paper. Predictions were written down first, then two
-rounds of hand labelling — 40 cases from one repo, then 45 from five:
+Shape B looked obviously cleaner on paper. Predictions were written down first, every time,
+then hand-labelled — 40 cases from one repo, 45 from five, then 20 drawn to settle a
+specific question:
 
-| | predicted | round 1 (n=40) | round 2 (n=45) |
-|---|---|---|---|
-| shape A precision | ~35% | 6/20 = 30% [15%, 52%] | 7/25 = 28% [14%, 48%] |
-| shape B precision | **~80%** | **0/20 = 0%**, ub 14% | **7/20 = 35% [18%, 57%]** |
-| dominant shape-A error | `new` — feature plus its docs | **zero `new`** | **`new`, 8 of 25** |
+| | predicted | round 1 (n=40) | round 2 (n=45) | round 3 (n=20) |
+|---|---|---|---|---|
+| shape A precision | ~35% | 6/20 = 30% [15%, 52%] | 7/25 = 28% [14%, 48%] | — |
+| shape B precision | **~80%** | **0/20 = 0%**, ub 14% | **7/20 = 35% [18%, 57%]** | 5/20 = 25% [11%, 47%] |
+| dominant shape-A error | `new` — feature plus its docs | **zero `new`** | **`new`, 8 of 25** | — |
 
 Read down that table rather than across it, because almost every cell overturned something.
 
@@ -55,15 +56,42 @@ That looked decisive. On cases they had not been designed against, shape-A preci
 30% → 28%: **no measurable improvement.** The retention number was fitted to its own test
 set, and this is what that costs.
 
+**Round 3 was designed to answer one question**, because round 2 had left rules and corpus
+confounded — both changed at once, so neither before/after was attributable to the rules
+alone. Twenty fresh shape-B cases from `psf/requests`, the repo that had scored 0/20, under
+the current rules. Round 2's shape-B sample happened to contain no `requests` cases at all,
+so the two comparisons each vary exactly one thing:
+
+| contrast | holds fixed | varies | result | Fisher p |
+|---|---|---|---|---|
+| round 3 vs round 1 | repo | rules | 0/20 → 5/20 | **0.047** |
+| round 3 vs round 2 | rules | repo | 25% vs 41% | 0.48 |
+
+**The rules get the credit.** Shape B improved on the very repo where it had measured zero,
+out of sample, and there is no detectable repo effect left. That confound is retired.
+
+And then the interesting part. Four predictions were recorded before labelling; the point
+estimate was called *exactly* — 5 of 20 — and the mechanism behind it was still wrong:
+
+> **The dominant error class is now `unclear`, not `cosmetic`. Round 1 was 12/20 cosmetic and
+> the new filters drop all 12.**
+
+Cosmetic went 12/20 → 10/20 (p = 0.75). It is still the largest class; the gain came out of
+`unclear` instead. The filters select on *evidence shape* — was a marked-up literal withdrawn,
+is this a tutorial renumber — and "cosmetic" is not an evidence shape. It arrives in all of
+them. So the filters removed round 1's particular cosmetic cases without reducing the rate at
+which the arm admits cosmetic ones, exactly as the fitted retention number had implied and
+exactly as the fresh sample denied.
+
+**Being right about the number is not being right about the cause**, and only the error
+breakdown could tell the two apart. A harness that reported precision alone would have
+scored this round as a clean confirmation.
+
 This is the argument for building the eval harness before the model. Every wrong belief above
 was held confidently, was reasonable given the evidence at the time, and was corrected only
 by a measurement that did not care what had been predicted.
 
-One limit stated plainly: rules *and* corpus changed between rounds, so neither before/after
-is attributable to the rules alone. Separating them needs another labelling round drawn from
-the held-out repo.
-
-## One bug, three times
+## One bug, four times — the fourth inside the fix for the first three
 
 Tracing two true positives that a new filter discarded turned up a root cause that had
 nothing to do with the filter. `_TOKEN_RE` requires a leading letter and token
@@ -85,25 +113,68 @@ tokeniser threw away.* The fix is principled rather than a patch — inside a ma
 span the stoplist and the digit filter are switched **off**, because there `True` and `30`
 are code, not English. All nine cases are regression tests in `tests/test_identifiers.py`.
 
+**Then round 3 found a fourth instance, in the code written to fix the first three.** The
+version pattern was `\b\d+(?:\.\d+)+…`, and `\b` does not fire between `v` and `0`. So a
+leading `v` did not prevent a match — it *truncated* it, silently, from the second component:
+
+| documentation change | registered as | why |
+|---|---|---|
+| `v0.5.0` mentioned | `ver:5.0` | the `v` shifted the match start |
+| `v1.0.0` → `v2.0.0` | **no change** | both collapse to `ver:0.0` — same token |
+
+That last row is the disease itself, one more time: a version bump written the way projects
+actually write it produced two identical tokens, so the correction withdrew nothing and added
+nothing. The same pattern also matched `127.0.0.1`, `179.13.100.4` and a MIME boundary
+`127.0.0.1.502.21746.1321131593.786.1` — a dotted numeric run is not a version. It is now
+capped at three components and absorbs the `v`; genuine four-component versions are the
+knowing price of rejecting IP addresses.
+
+Worth being precise about how this was found, because it was not found by reading the regex.
+It came out of a single anomalous label — one `new` verdict on a doc-only commit, which the
+arm's design says is impossible — and pulling that thread led to the regex four steps later.
+
 ## What is honest about the current numbers, and what is not
 
-The only numbers here that are unbiased estimates are the round-2 ones, because round 2 was
-labelled after the rules were frozen and drawn from repos the rules had not been tuned
-against:
+The unbiased estimates are the ones from rounds 2 and 3, because both were labelled after the
+rules were frozen and drawn from cases the rules had not been tuned against:
 
 ```
-shape A   7/25 = 28%   95% CI [14%, 48%]
-shape B   7/20 = 35%   95% CI [18%, 57%]
+shape A                      7/25 = 28%   95% CI [14%, 48%]
+shape B, five repos pooled  12/37 = 32%   95% CI [20%, 49%]
 ```
 
 Shape B nominally leads, but those intervals overlap almost completely — the ordering of the
 two arms is **not** established by this data, and any claim that one is better needs a larger
-sample than 45 cases.
+sample than 85 cases.
 
-Two further rule changes are priced against round 2 and project shape A to 38% and shape B to
-41%. **Those two figures are hypotheses, not results**, for the same reason the round-1
-retention number was: they were designed against the cases they are scored on. They get
-believed or discarded by a round 3.
+One rule change is priced against round 2 and projects shape A to 38%. **That figure is a
+hypothesis, not a result**, for the same reason the round-1 retention number was: it was
+designed against the cases it is scored on. It gets believed or discarded by a shape-A round 3.
+
+A second change — dropping shape-B cases whose only evidence is a version literal — removes a
+class measured at zero and costs no true positive on the sample available:
+
+```
+shape B, evidence is only a version literal    0/10 =  0%   [0%, 28%]
+shape B, evidence includes a real symbol      12/27 = 44%   [28%, 63%]
+true positives lost                           0 of 12
+```
+
+**That 44% is a hypothesis too, for exactly the reason the last one was.** Nine of the ten
+dropped cases were labelled before the rule existed, which is better than round 1 — but the rule
+was designed by reading all ten, so it is still scored on its own design set. Structurally this
+is the same shape as the 6/6-kept-14/14-dropped retention that looked decisive and preceded a
+30% → 28% no-op. Recognising the pattern is not the same as escaping it.
+
+What is *not* fitted here is the mechanism, which is argued from the arm's structure rather than
+from the sample: shape B has no code diff, so a withdrawn version literal has nothing it can be
+checked against. That argument would hold even if the ten cases had never been labelled. It is
+also why the filter ships **off by default**, with a fresh batch drawn to test it.
+
+The distinction this section keeps making — a measured number versus a number fitted to the
+cases that motivated it — is the single thing the eval harness exists to preserve. Every figure
+above is marked one way or the other, because the project's own history is that the fitted ones
+felt the most convincing at the time.
 
 The recall side is unmeasured throughout. Precision is cheap to estimate from a sample of
 what a rule fires on; recall needs to know what it missed, which needs labelled cases the
@@ -151,13 +222,35 @@ Other limits, stated rather than buried:
 ## Reproducibility
 
 Every mine writes a manifest next to its output recording each repo's pinned sha, the commit
-window, the full rule config, and a sha256 of the result. Its `replay` field regenerates the
-label set byte-identically — verified, not assumed:
+window, the full rule config, the miner's own commit, and a sha256 of the result. Its `replay`
+field regenerates the label set byte-identically:
 
 ```
 $ driftwood mine --out labels.jsonl --limit 4000 --pin psf/requests=dae7ef6...
 $ # sha256 in the new manifest matches the old one
 ```
+
+**Two of those fields are there because the mechanism was broken and said nothing.** Both are
+worth reading as findings rather than features, since a provenance system that fails silently
+is worse than none:
+
+- `--pin` was declared `nargs="*"`, so argparse kept only the **last** occurrence of a repeated
+  flag — and the `replay` line the tool emits is `--pin a=sha --pin b=sha …`. Following the
+  documented replay command therefore pinned one repo out of five and mined the other four at a
+  moving HEAD. No error, a plausible-looking corpus, a different one. A mistyped slug was
+  equally quiet, because `pins.get(slug, "HEAD")` cannot distinguish a typo from "no pin asked
+  for". Both now refuse loudly; `tests/test_pinning.py` asserts *both* spellings keep every pin,
+  and asserts the count, because the old behaviour returned a non-empty list and would have
+  passed any weaker check.
+- The manifest pinned every repo sha and the entire rule config, which felt complete. But the
+  rules live in code, and correcting the version pattern above changed which tokens get
+  extracted. **Every manifest written before that fix promises a regeneration the current code
+  cannot deliver, and nothing in the file said so.** A config dict is not a version; the
+  manifest now records the miner's commit and whether `src/` was dirty.
+
+For a project about documentation that has quietly stopped being true, having it happen to the
+reproducibility documentation is the most on-the-nose thing in the repo. It is the second
+instance: the `mine` usage example below destroyed the one irreplaceable label file first.
 
 The manifest has already earned its keep as more than a replay mechanism. It records how many
 examples were written; the scorer keys by `example_id` and reported two fewer. That
@@ -195,6 +288,16 @@ label set that predates manifests and therefore cannot be regenerated.
 - **Matched negatives**: the same doc/code pair at the fixing commit itself. Same file, same
   repo, seconds apart in project time, differing only in whether the correction landed. A
   detector that fires equally on both is not detecting drift.
+- **The same signal can be evidence in one arm and noise in the other.** Version literals were
+  added because three false negatives traced to them, and on shape A they earn their keep: there
+  the literal must appear in the *code* diff too, which is how a `python_requires` change gets
+  caught. On shape B there is no code diff, so a withdrawn version literal cannot be checked
+  against anything — and what actually withdraws one is a doc rewriting its own example output
+  (a `User-Agent` header, a console transcript), or listing other projects' versions. Even the
+  genuine cases (`supports Python 3.3–3.5`) came back `unclear` every time, because a doc-only
+  commit dropping a support line does not show whether support ended. Same token, opposite
+  value, and the arm is what decides which. A filter that reads "drop version-only evidence"
+  would be wrong applied globally; scoping it per arm is the whole content of the rule.
 - **Never-co-changed negatives come in two tiers, not one**, because a uniformly random
   doc/code pair is trivially unrelated and a specificity number built only from those would
   price the problem far below reality — in production the detector sees pairs *retrieval*

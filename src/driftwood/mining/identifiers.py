@@ -118,7 +118,31 @@ _STOPWORDS = _KEYWORDS | _ENGLISH | _PLATFORM
 # literals and will now score as changed claims. `COSMETIC_SUBJECT_MARKERS`
 # already catches "bump" and "version number", and changelogs are excluded by
 # path, so there is some cover; whether it is enough is a question for the labels.
-_VERSION_RE = re.compile(r"\b\d+(?:\.\d+)+(?:\.?(?:a|b|rc|dev|post)\d*)?\b")
+#
+# Rewritten 2026-09-18 after reading the ten hand-judged shape-B cases whose only
+# evidence was a `ver:` token. The first version was `\b\d+(?:\.\d+)+...` and it was
+# wrong in two ways that the labels made visible and no test had:
+#
+#   `127.0.0.1`, `179.13.100.4`, and a MIME boundary `127.0.0.1.502.21746...` all
+#   matched. A dotted numeric run is not a version. Hence at most three components
+#   and the trailing `(?!\.?\d)`, which is what actually rejects an address: without
+#   it the pattern happily matches the `127.0.0` prefix of a dotted quad.
+#
+#   A leading `v` truncated the match instead of being absorbed, because `\b` does
+#   not fire between `v` and `0`. So `v0.5.0` yielded `5.0` -- and, far worse,
+#   `v1.0.0` and `v2.0.0` BOTH yielded `0.0`. Two different versions collided on one
+#   token, which means a doc corrected from one to the other registered as no change
+#   at all. That is a fourth instance of this file's recurring bug: the token
+#   carrying the claim is the one the tokeniser destroys. Found in the code written
+#   to fix the first three.
+#
+# Four digits per component, so calendar versions like `2023.11.0` survive. Genuine
+# four-component versions (`1.2.3.4`) are now missed; that is the price of rejecting
+# IP addresses, and it is the cheaper of the two errors on documentation prose.
+_VERSION_RE = re.compile(
+    r"(?<![\w.])[vV]?(?P<version>\d{1,4}(?:\.\d{1,4}){1,2}"
+    r"(?:\.?(?:a|b|rc|dev|post)\d*)?)(?!\.?\d)"
+)
 
 # Standalone integers, prefixed `num:` for the same reasons as `ver:`. The negative
 # lookarounds keep this from shredding a version literal into its components, so
@@ -245,8 +269,12 @@ def extract_versions(text: str) -> set[str]:
     """Just the version literals. Separate because they are the one claim type
     that is legitimately made in bare prose -- "supports Python 3.8" needs no
     backticks to be a factual assertion -- so `literals_only` must not filter them
-    out along with the surrounding English."""
-    return {f"ver:{match.group(0)}" for match in _VERSION_RE.finditer(text)}
+    out along with the surrounding English.
+
+    Emits the numeric part only, so `v1.0.0` and `1.0.0` are the same token. A doc
+    that switches between the two spellings is not asserting anything new.
+    """
+    return {f"ver:{match.group('version')}" for match in _VERSION_RE.finditer(text)}
 
 
 def extract_numbers(text: str) -> set[str]:

@@ -1,0 +1,63 @@
+{
+  "generated_at": "2026-09-18T13:31:51+00:00",
+  "output": {
+    "path": "data/labels-v10.jsonl",
+    "examples": 5841,
+    "sha256": "ad5b9cacb3afe55d7bcae5bed571ffe0ac0c8b0ab4bbcfb47c3724f2951a661e"
+  },
+  "repos": {
+    "psf/requests": "dae7ef63b4df6eded86637f251fc4e3a06c3b479",
+    "pallets/flask": "d73fa1cdcbd8b1465c151db8924ba58b1dd14e35",
+    "encode/httpx": "b5addb64f0161ff6bfe94c124ef76f6a1fba5254",
+    "pydantic/pydantic": "915896d163835a57fd7987180087409a3229bd71",
+    "fastapi/fastapi": "50113da16fec53b66b80d75e80a89296de4fa5a5"
+  },
+  "miner": {
+    "commit": "baca87e2644ab56d038502a1efa2b58a3d9742b2",
+    "src_dirty": "yes"
+  },
+  "window": {
+    "limit": 4000,
+    "since": null
+  },
+  "config": {
+    "max_files_in_commit": 20,
+    "min_shared_identifiers": 1,
+    "max_pairs_per_commit": 6,
+    "min_doc_lines_changed": 2,
+    "drop_cosmetic_subjects": true,
+    "drop_urls": true,
+    "drop_code_comments": true,
+    "require_removed_identifier": true,
+    "match_versions": true,
+    "easy_negatives_per_repo": 200,
+    "easy_negative_seed": 17,
+    "require_withdrawn_claim": false,
+    "drop_docs_build_paths": true,
+    "doc_literals_only": true,
+    "require_symbol_beyond_version": false
+  },
+  "counts": {
+    "encode/httpx clean shape=negative": 384,
+    "encode/httpx clean shape=negative_easy": 106,
+    "encode/httpx drift shape=A": 343,
+    "encode/httpx drift shape=B": 41,
+    "fastapi/fastapi clean shape=negative": 238,
+    "fastapi/fastapi clean shape=negative_easy": 200,
+    "fastapi/fastapi drift shape=A": 180,
+    "fastapi/fastapi drift shape=B": 58,
+    "pallets/flask clean shape=negative": 890,
+    "pallets/flask clean shape=negative_easy": 130,
+    "pallets/flask drift shape=A": 727,
+    "pallets/flask drift shape=B": 161,
+    "psf/requests clean shape=negative": 153,
+    "psf/requests clean shape=negative_easy": 101,
+    "psf/requests drift shape=A": 75,
+    "psf/requests drift shape=B": 78,
+    "pydantic/pydantic clean shape=negative": 888,
+    "pydantic/pydantic clean shape=negative_easy": 200,
+    "pydantic/pydantic drift shape=A": 810,
+    "pydantic/pydantic drift shape=B": 78
+  },
+  "replay": "driftwood mine --out <path> --limit 4000 --pin psf/requests=dae7ef63b4df6eded86637f251fc4e3a06c3b479 --pin pallets/flask=d73fa1cdcbd8b1465c151db8924ba58b1dd14e35 --pin encode/httpx=b5addb64f0161ff6bfe94c124ef76f6a1fba5254 --pin pydantic/pydantic=915896d163835a57fd7987180087409a3229bd71 --pin fastapi/fastapi=50113da16fec53b66b80d75e80a89296de4fa5a5"
+}

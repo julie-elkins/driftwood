@@ -42,6 +42,38 @@ def _manifest_path(out: Path) -> Path:
     return out.with_suffix(".manifest.json")
 
 
+def _miner_revision() -> dict[str, str]:
+    """The miner's own code state, for the manifest.
+
+    Added 2026-09-18 after a bug fix silently invalidated an existing manifest's
+    replay claim. The manifest pinned every repo sha and the whole rule config, which
+    made it feel complete -- but the *rules* live in code, and `_VERSION_RE` was
+    corrected in a way that changes which tokens are extracted. Every manifest written
+    before that fix promises a byte-identical regeneration that the current code
+    cannot deliver, and nothing in the file said so.
+
+    A config dict is not a version. This is the input that was missing.
+    """
+    import subprocess
+
+    root = Path(__file__).resolve().parents[3]
+    try:
+        rev = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "HEAD"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        dirty = subprocess.run(
+            ["git", "-C", str(root), "status", "--porcelain", "--", "src"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+    except (subprocess.CalledProcessError, OSError):
+        # Running from a tarball or without git. Say so rather than omitting the key,
+        # because a missing field reads as "not checked" and an absent one reads as
+        # "clean" -- the same asymmetry this project keeps running into.
+        return {"commit": "unknown", "src_dirty": "unknown"}
+    return {"commit": rev, "src_dirty": "yes" if dirty else "no"}
+
+
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -59,6 +91,7 @@ def _cmd_mine(args: argparse.Namespace) -> int:
         doc_literals_only=args.doc_literals_only,
         require_withdrawn_claim=args.require_withdrawn,
         drop_docs_build_paths=args.drop_docs_build_paths,
+        require_symbol_beyond_version=args.require_symbol_beyond_version,
         easy_negatives_per_repo=args.easy_negatives,
     )
 
@@ -81,7 +114,24 @@ def _cmd_mine(args: argparse.Namespace) -> int:
 
     # `owner/name=sha` pins from a previous manifest. Replaying a run without these
     # mines a different commit window, because --limit counts back from HEAD.
+    #
+    # `--pin` was `nargs="*"` until 2026-09-18, which meant argparse kept only the LAST
+    # occurrence of a repeated flag -- and the `replay` line built below emits exactly
+    # the repeated form. So every manifest in this repo advertised a replay command that
+    # silently un-pinned four of its five repos and mined them at a moving HEAD. No
+    # error, a plausible-looking corpus, and a different one. `action="extend"` accepts
+    # both spellings; the check below is the other half, because a mistyped slug was
+    # equally silent -- `pins.get(slug, "HEAD")` treats a typo as "no pin requested".
     pins = dict(pin.split("=", 1) for pin in args.pin)
+    unknown = sorted(set(pins) - set(args.repos))
+    if unknown:
+        print(
+            "pinned repo(s) not in --repos: " + ", ".join(unknown) + "\n"
+            "  a pin that matches no repo is silently ignored, and the run would mine\n"
+            "  a moving HEAD while looking pinned. Fix the slug or add it to --repos.",
+            file=sys.stderr,
+        )
+        return 2
 
     counts: Counter[str] = Counter()
     revs: dict[str, str] = {}
@@ -114,6 +164,7 @@ def _cmd_mine(args: argparse.Namespace) -> int:
             "sha256": _sha256(args.out),
         },
         "repos": revs,
+        "miner": _miner_revision(),
         "window": {"limit": args.limit, "since": args.since},
         "config": asdict(cfg),
         "counts": dict(sorted(counts.items())),
@@ -288,7 +339,8 @@ def main(argv: list[str] | None = None) -> int:
     mine.add_argument("--since", default=None, help='e.g. "2022-01-01"')
     mine.add_argument(
         "--pin",
-        nargs="*",
+        action="extend",
+        nargs="+",
         default=[],
         metavar="owner/name=SHA",
         help="mine each repo at a fixed sha, as printed in a manifest's `replay` "
@@ -345,6 +397,17 @@ def main(argv: list[str] | None = None) -> int:
         help="shape B: keep doc changes that are example-include renumbering "
         "(tutorial001, docs_src). On by default -- measured at 3 of 20 cases, all "
         "cosmetic, costing no true positive",
+    )
+    mine.add_argument(
+        "--require-symbol-beyond-version",
+        dest="require_symbol_beyond_version",
+        action="store_true",
+        default=False,
+        help="shape B: reject cases whose withdrawn evidence is only version "
+        "literals. Those scored 0/10 against 37 hand labels where the rest of the "
+        "arm scored 44%%, because a doc-only commit withdraws a version literal by "
+        "rewriting its own example output. Off by default: subtractive, so "
+        "`retention` prices it against the existing sheets first",
     )
     mine.set_defaults(func=_cmd_mine)
 

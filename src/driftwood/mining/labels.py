@@ -173,6 +173,31 @@ class MineConfig:
     # like `guarantee` and `stability`. Both are reworded English, and English is
     # most of what a doc contains.
     doc_literals_only: bool = True
+    # Shape B only. Reject a doc-only commit whose withdrawn evidence is *entirely*
+    # version literals, with no symbol behind it.
+    #
+    # Added 2026-09-18 from the third review, and it is the best-evidenced filter here
+    # -- the split was computed from 37 already-judged cases that were labelled for
+    # other reasons, so 9 of the 10 cases it drops were judged before the rule existed.
+    # Those ten scored 0/10 (ub 28%) where the rest of the arm scored 12/27 = 44%.
+    #
+    # The mechanism, from reading all ten: shape B has no code diff, so a withdrawn
+    # version literal cannot be checked against anything. What actually withdraws one
+    # is a doc rewriting its own example output -- a `User-Agent: python-requests/0.13.1`
+    # line, a MIME boundary, a console transcript -- or listing third-party projects'
+    # versions, neither of which is a claim about this codebase. The genuine cases
+    # ("supports Python 3.3-3.5", "PyPy-c 1.7") are real claims but came back
+    # `unclear` every time, because a doc-only commit dropping a support line does not
+    # show whether support ended.
+    #
+    # `ver:` stays on for shape A, where the same claim IS checkable: there the literal
+    # has to appear in the code diff too, which is how `python_requires` moving gets
+    # caught. Same token, opposite value, because the two arms have different evidence.
+    #
+    # DEFAULT OFF like the rest, so the corpus does not change under a rule whose price
+    # in recall is still zero-measured. Purely subtractive, so `retention` can price it
+    # against the existing sheets without relabelling anything.
+    require_symbol_beyond_version: bool = False
 
 
 @dataclass(frozen=True)
@@ -294,6 +319,10 @@ def _mine_commit(
                 literals_only=cfg.doc_literals_only,
             )
             if cfg.require_removed_identifier and not sides["removed_only"]:
+                continue
+            if cfg.require_symbol_beyond_version and not any(
+                not token.startswith("ver:") for token in sides["removed_only"]
+            ):
                 continue
             positive = Example(
                 example_id=_example_id(repo, parent, doc.path, None, LABEL_DRIFT),
