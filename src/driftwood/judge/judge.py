@@ -279,10 +279,21 @@ class AnthropicJudge:
             self._client = client
         else:
             if not os.environ.get("ANTHROPIC_API_KEY"):
+                # `floors` is a real `--judges` value, and it was not when this message
+                # was written: it said to run `--judges floors` while argparse would
+                # have rejected it. A false claim about the code, in the error path of a
+                # tool for finding false claims about code, pinned by a test that
+                # matched the word rather than checking the flag. See
+                # `tests/test_judge_cli.py`, which now reads the parser.
+                # The command is backticked so it is separable from the sentence around
+                # it -- both for the reader pasting it and for the test parsing it. The
+                # first attempt at that test read `--judges` to end-of-words and
+                # captured "floors to get the" as flag values.
                 raise RuntimeError(
                     "ANTHROPIC_API_KEY is not set. Every other judge in this module "
-                    "runs without it -- run the eval with --judges floors to get the "
-                    "floors, which is the half of the result that does not cost money."
+                    "runs without it: `driftwood judge-eval --judges floors` gets the "
+                    "floors, which is the half of the result that does not cost money, "
+                    "and the half that makes the other half readable."
                 )
             from anthropic import Anthropic  # imported late: optional dependency
 

@@ -967,8 +967,14 @@ subject and no mining evidence reached it. The model arm is an extra and needs a
 
 ```
 uv sync --extra judge
-uv run driftwood judge-eval --judges always-not-false always-false lexical-absence model
+uv run driftwood judge-eval --judges floors model --out data/scores/judge-model.json
 ```
+
+`floors` is a group value standing for the three free judges, so the interesting command —
+floors and the model arm together, which is the only form in which either is readable — is short
+enough to paste. It was not: the four judges spelled out ran to 150 characters, wrapped in a
+terminal, and executed as `--out` with no argument followed by a stray path. A flag long enough to
+wrap is a flag that silently runs something else.
 
 Replies are cached under `.cache/judgements`, keyed by content rather than by case id, so
 re-running is free and editing the prompt is not.

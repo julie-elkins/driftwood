@@ -336,10 +336,14 @@ class TestTheModelArm:
         assert len(written) == 1
         assert "not going to answer" in json.loads(written[0].read_text())["text"]
 
-    def test_no_key_and_no_client_refuses_with_the_free_alternative(self, monkeypatch):
+    def test_no_key_and_no_client_refuses_rather_than_scoring_nothing(self, monkeypatch):
         monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-        with pytest.raises(RuntimeError, match="floors"):
+        with pytest.raises(RuntimeError):
             AnthropicJudge()
+        # This used to assert `match="floors"`, which passed while the message named a
+        # flag value argparse rejected. Whether the suggested command is runnable is
+        # checked against the parser in `tests/test_judge_cli.py`; matching prose
+        # against prose is what let the false instruction through.
 
 
 class TestTheResultsFile:

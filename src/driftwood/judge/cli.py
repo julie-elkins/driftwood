@@ -35,6 +35,22 @@ __all__ = ["add_parser"]
 # key is a smaller command rather than an error.
 FREE_JUDGES = ("always-not-false", "always-false", "lexical-absence")
 
+# `floors` names all three at once. A group value rather than three words, for two
+# reasons. It is the vocabulary the reports and the README already use, so the flag
+# reads the way the result does. And the alternative is a 150-character command line,
+# which wraps in a terminal and silently truncates when pasted -- the failure that
+# produced `--out` with no argument followed by a stray path being run as a command.
+JUDGE_GROUPS = {"floors": FREE_JUDGES}
+JUDGE_CHOICES = ("floors", "model", *FREE_JUDGES)
+
+
+def _expand_groups(names) -> set[str]:
+    """`--judges floors model` -> the four judge names it stands for."""
+    out: set[str] = set()
+    for name in names:
+        out.update(JUDGE_GROUPS.get(name, (name,)))
+    return out
+
 
 def _cmd_cases(args: argparse.Namespace) -> int:
     cases, tally = load_cases(args.review, args.data)
@@ -59,7 +75,7 @@ def _cmd_freeze(args: argparse.Namespace) -> int:
 
 def _build_judges(args: argparse.Namespace) -> dict[str, object]:
     judges: dict[str, object] = {}
-    wanted = set(args.judges)
+    wanted = _expand_groups(args.judges)
     if "always-not-false" in wanted:
         judges["always-not-false"] = AlwaysJudge(False)
     if "always-false" in wanted:
@@ -224,9 +240,9 @@ def add_parser(subparsers) -> None:
              "top-k, the only arm that covers shape B",
     )
     ev.add_argument(
-        "--judges", nargs="+", default=list(FREE_JUDGES),
-        choices=["always-not-false", "always-false", "lexical-absence", "model"],
-        help="defaults to the three that need no key",
+        "--judges", nargs="+", default=["floors"], choices=list(JUDGE_CHOICES),
+        help="`floors` is the three that need no key, and is the default; `model` "
+             "needs ANTHROPIC_API_KEY and costs money",
     )
     ev.add_argument(
         "--lexical-thresholds", nargs="+", type=int, default=[1, 3, 6],
