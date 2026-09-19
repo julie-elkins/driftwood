@@ -19,15 +19,34 @@ Neither is excluded by omission here. `LEAKING_FIELDS` names them, `render` is t
 only way text reaches a model, and a test asserts the rendered string contains
 neither. Leakage of this kind does not fail -- it produces an excellent number.
 
-Two arms, fixed before any model ran:
+Three arms. The first two were fixed before any model ran; the third was added after
+the first paid run, because reading the model's own reasons showed the oracle arm could
+not answer the question it was built to ask.
 
-- **oracle** (shape A only, 45 cases): the code file the commit actually touched.
-  Isolates judging skill from retrieval quality. Not a product configuration --
-  in production nobody hands you the file.
+- **oracle** (shape A only, 45 cases): the code file the commit actually touched, and
+  nothing else. Built to isolate judging skill from retrieval quality. **It does not
+  do that, and the number it produced is kept rather than corrected.** The judge
+  abstained on 31 of 45, and on the 10 `drift` cases it abstained on, its stated reason
+  was one file being insufficient seven times: `requests/__init__.py` "merely imports
+  these names", `setup.py` cannot speak to SOCKS support, `flask/testing.py` is not
+  where `before_request` lives. A documentation page makes claims about a package, and
+  one module is not a package -- so this arm's ceiling is file count, not judging skill.
+- **seeded** (shape A only, 45 cases): the commit's own file *plus* retrieval's top hits
+  up to `k`. This is what "isolate judging from retrieval" actually requires -- the
+  known-relevant file is guaranteed present, so a failure here cannot be retrieval
+  missing it, while the judge still gets enough of the package to decide. A separate arm
+  rather than a redefinition of `oracle`, because `oracle`'s number is already published
+  in `data/scores/` and silently changing what a published arm means is worse than
+  carrying a superseded one.
 - **retrieved** (all 125): `Lexical` supplies the top-k code files for the document
   from the repo's CODE pool at `at_sha`. The only arm that covers shape B, which is
   80 of the 125 and has no code side in the commit at all, and the only end-to-end
   number.
+
+Code files are **windowed, not head-truncated** -- see `select_relevant`. That changed
+for the same reason the third arm exists: the run reported "18 documents were cut" and
+said nothing about 29 of 45 code files being cut, and three of the ten `drift`
+abstentions named the cut as their reason.
 
 Both read the tree at `at_sha` -- the parent of the fix -- so the state on screen is
 the state the verdict was written about. No diff is assembled anywhere in this
@@ -37,6 +56,7 @@ module. The diff-shown ceiling arm lives elsewhere and is a diagnostic.
 from __future__ import annotations
 
 import hashlib
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -54,9 +74,10 @@ __all__ = [
     "JudgeContext",
     "LEAKING_FIELDS",
     "render",
+    "select_relevant",
 ]
 
-ARMS = ("oracle", "retrieved")
+ARMS = ("oracle", "seeded", "retrieved")
 
 # Fields on a mined record that describe the correcting commit rather than the state
 # being judged. Named rather than merely left out, so the exclusion is testable.
@@ -85,6 +106,140 @@ CODE_BUDGET = 6_000
 # This is a swept dimension, not a settled one -- `--k` exists and the model arm
 # should be run at 3, 5 and 10 before any of it is described as the retrieved result.
 DEFAULT_K = 5
+
+
+# How many lines of a code file's head are kept unconditionally when it has to be cut.
+# The module docstring and the import block orient a reader for almost nothing, and they
+# are the one region whose relevance cannot be judged by identifier overlap.
+_HEAD_LINES = 12
+
+# Lines kept either side of a line that mentions one of the document's identifiers.
+# Small on purpose: the budget is fixed, so every line of padding is a line of some
+# other function that does not get shown.
+_CONTEXT_LINES = 5
+
+_DEF_RE = re.compile(r"^\s*(?:async\s+def|def|class)\s")
+
+# Import and re-export lines, scored at zero so they never buy a window of their own.
+_IMPORT_RE = re.compile(r"^\s*(?:from|import)\s")
+
+# A line that DEFINES one of the document's identifiers is worth ten that mention one,
+# and the first version of this function weighted them equally. That is the project's own
+# lesson turned on itself: `requests/__init__.py` scores ~100% claim coverage while
+# containing no implementation, because a token-presence metric cannot tell "defines"
+# from "mentions". Ranking windows by raw identifier density does the same thing one level
+# down -- the densest lines in a large library module are its docstring, its `__all__` and
+# its import block, so an unweighted budget goes to the parts of the file that name
+# everything and implement nothing. Measured: unweighted windowing made 5 of 29 cut files
+# WORSE than head-truncation, `src/flask/app.py` from 100% to 0%.
+_DEFINITION_WEIGHT = 10
+_MENTION_WEIGHT = 1
+
+
+def select_relevant(
+    text: str, budget: int, wanted: frozenset[str] | set[str]
+) -> tuple[str, bool]:
+    """Keep the parts of a code file that mention what the document talks about.
+
+    Replaces head-truncation for code, and the reason is measured rather than
+    aesthetic. 29 of the 45 oracle files in the first paid run were over the
+    6,000-character budget -- `flask/app.py` is 70,003, `flask.py` 47,528 -- so what the
+    judge was shown was the first eighth of a module and the hope that the relevant
+    function was near the top. It was not, and the model said so in its own words on
+    three of the ten `drift` cases it abstained on: "the Response class methods ... are
+    truncated and not visible", "the relevant classes ... are truncated out of the
+    provided models.py excerpt".
+
+    That is the whole failure: a budget is unavoidable, choosing the *front* of the file
+    is not. Selection is by overlap with the identifiers the document marks up, which is
+    a signal available at inference time from the document alone -- it must be, or this
+    would be a leak rather than a retrieval step. It deliberately does NOT use
+    `shared_identifiers`, which is the miner's evidence and names the drifted sentence.
+
+    Elisions are marked and counted, for the same reason head-truncation was marked: a
+    judge answering "no claim about this is made here" on silently-cut code is right
+    about what it was shown and wrong about the file, and nothing in the output would
+    tell the two apart.
+    """
+    if len(text) <= budget:
+        return text, False
+    lines = text.splitlines(keepends=True)
+    keep: set[int] = set(range(min(_HEAD_LINES, len(lines))))
+
+    # Score each line by how many of the document's identifiers it mentions, and collect
+    # a window around the hits. The nearest enclosing `def`/`class` line is pulled in
+    # alongside: a hit inside a function body with its signature cut away cannot answer
+    # "does this parameter exist", which is most of what the documentation claims.
+    windows: list[tuple[int, set[int]]] = []
+    for index, line in enumerate(lines):
+        hits = len(wanted & extract(line, versions=False))
+        if not hits:
+            continue
+        if _DEF_RE.match(line):
+            score = hits * _DEFINITION_WEIGHT
+        elif _IMPORT_RE.match(line):
+            score = 0
+        else:
+            score = hits * _MENTION_WEIGHT
+        if not score:
+            continue
+        span = set(range(max(0, index - _CONTEXT_LINES),
+                         min(len(lines), index + _CONTEXT_LINES + 1)))
+        for back in range(index, max(-1, index - 60), -1):
+            if _DEF_RE.match(lines[back]):
+                span.add(back)
+                break
+        windows.append((score, span))
+
+    # Highest-scoring windows first, so that what survives a tight budget is the densest
+    # match rather than whatever happened to be earliest in the file.
+    spent = sum(len(lines[i]) for i in keep)
+    for _score, span in sorted(windows, key=lambda w: -w[0]):
+        cost = sum(len(lines[i]) for i in span - keep)
+        if spent + cost > budget:
+            continue
+        keep |= span
+        spent += cost
+
+    if len(keep) == len(lines):
+        return text, False
+
+    # Never return something that covers less of what the document talks about than the
+    # head-truncation this replaced. Windowing can lose on a file whose relevant
+    # definitions happen to sit in the first 6,000 characters: the budget goes to a
+    # higher-scoring window further down and drops a definition the head included for
+    # free. Measured on 29 real cut files before the weighting above, and it is not an
+    # edge case, so it is checked rather than argued about.
+    #
+    # The comparison is on `wanted` -- the document's own identifiers -- which is the
+    # signal this function is already allowed to see. Comparing on the drifted sentence
+    # instead would pick the better arm using the answer, and would report a recovery
+    # nothing could reproduce on a page whose answer is unknown.
+    kept = "".join(lines[index] for index in sorted(keep))
+    head, _ = _truncate(text, budget)
+    if len(wanted & extract(head, versions=False)) > len(
+        wanted & extract(kept, versions=False)
+    ):
+        return head, True
+
+    out: list[str] = []
+    elided = 0
+    for index, line in enumerate(lines):
+        if index in keep:
+            if elided:
+                out.append(f"\n... [{elided} line(s) elided] ...\n\n")
+                elided = 0
+            out.append(line)
+        else:
+            elided += 1
+    if elided:
+        out.append(f"\n... [{elided} line(s) elided] ...\n")
+    out.append(
+        f"\n[This file is {len(lines)} lines / {len(text):,} characters. The "
+        f"{len(keep)} line(s) shown were selected as the ones mentioning identifiers "
+        "the documentation marks up; the elided lines mention none of them.]\n"
+    )
+    return "".join(out), True
 
 
 def _truncate(text: str, budget: int) -> tuple[str, bool]:
@@ -146,9 +301,23 @@ class JudgeContext:
         arm scored the model at F1 0.40 with a 69% abstention rate, which read as a judge
         with no appetite for committing; the abstentions turned out to be correct and
         specific -- "the only code file provided is config.py, which defines ConfigDict,
-        not Field". The oracle arm shows the file the FIX COMMIT touched, and this
-        measures how far that is from the file the document is making claims about.
-        Median across the 45 shape-A cases: 16%. It is 0% for 5 of them.
+        not Field". Median across the 45 shape-A cases: 16% at the time, 24% now.
+
+        **READ THE DENOMINATOR BEFORE QUOTING THIS.** It was quoted once as evidence that
+        the oracle arm shows the WRONG FILE, and that conclusion does not follow from this
+        number. The denominator is every identifier the *whole document* marks up -- a
+        median of 52 per page, spread over many topics -- while one code file will never
+        contain most of them even when it is exactly the right file. 16% is therefore
+        equally consistent with "the file is irrelevant" and "the file is right and the
+        page is long", and a metric that cannot separate those two cannot justify a
+        redesign. It was being used to justify one.
+
+        The narrower denominator settles it and lives in `scripts/oracle_file_audit.py`,
+        which cannot be computed here: it needs the drifted sentence's own identifiers,
+        which is miner evidence that must never reach a prompt. Measured there, the
+        commit's file is the single best-covering file in its pool in 37 of 45 cases and
+        top-5 in 44 of 45. So this number is a warning that ONE FILE IS NOT ENOUGH -- the
+        thing the `seeded` arm exists to fix -- and not evidence that the file is wrong.
 
         Not a judgement of the case, and deliberately not a filter. A document can
         legitimately discuss code in files other than the one on screen, and a low score
@@ -180,9 +349,29 @@ class ContextBuilder:
       already takes exactly this cache; it is threaded through rather than rebuilt.
     """
 
-    def __init__(self, clone_root: Path, *, k: int = DEFAULT_K) -> None:
+    def __init__(
+        self,
+        clone_root: Path,
+        *,
+        k: int = DEFAULT_K,
+        code_budget: int = CODE_BUDGET,
+        doc_budget: int = DOC_BUDGET,
+    ) -> None:
         self.clone_root = clone_root
         self.k = k
+        # A parameter rather than the constant read at the point of use, so that raising
+        # it is a recorded flag on one run instead of an edit that silently changes every
+        # later run's cache key. The budget is INSIDE that key -- it changes the rendered
+        # context -- so a run at a different budget re-pays for every case it touches,
+        # and which budget produced a score has to be readable off the score file.
+        self.code_budget = code_budget
+        # The doc side is a parameter for a sharper reason than symmetry. Measured on the
+        # 9 recall-costing cases of the 2026-09-19 seeded arm: on 3 of them the sentence
+        # the fixing commit deleted sits BEYOND 12,000 characters -- char 22,461 of a
+        # 38,830-character `docs/user/advanced.rst` -- so the false claim was never in the
+        # prompt and no amount of code could have answered it. Doc truncation was counted
+        # from the first run; whether it cut the CLAIM was not asked until now.
+        self.doc_budget = doc_budget
         self._pools: dict[tuple[str, str], list[str]] = {}
         self._texts: dict[tuple[str, str], dict[str, str]] = {}
         self._rankers: dict[tuple[str, str], Lexical] = {}
@@ -216,10 +405,10 @@ class ContextBuilder:
     def build(self, case: JudgeCase, arm: str) -> JudgeContext:
         if arm not in ARMS:
             raise ValueError(f"unknown arm {arm!r}; expected one of {ARMS}")
-        if arm == "oracle" and not case.code_path:
+        if arm in ("oracle", "seeded") and not case.code_path:
             raise ValueError(
                 f"case {case.example_id} is shape {case.shape} and has no code_path; "
-                "the oracle arm covers shape A only"
+                f"the {arm} arm covers shape A only"
             )
 
         clone = self._clone(case.repo)
@@ -229,7 +418,7 @@ class ContextBuilder:
         if raw_doc is None:
             missing.append(case.doc_path)
             raw_doc = ""
-        doc_text, doc_truncated = _truncate(raw_doc, DOC_BUDGET)
+        doc_text, doc_truncated = _truncate(raw_doc, self.doc_budget)
 
         pool = self._pool(case.repo, case.at_sha)
         texts = self._code_texts(case.repo, case.at_sha)
@@ -245,8 +434,13 @@ class ContextBuilder:
             if case.code_path in ranked:
                 oracle_rank = ranked.index(case.code_path) + 1
 
+        # The selection signal: what the document itself marks up. Derived from the
+        # document alone, so the same rule works at inference time on a repository
+        # nobody has labelled.
+        wanted = extract(literal_spans(raw_doc), versions=False)
+
         chosen: list[CodeFile] = []
-        if arm == "oracle":
+        if arm in ("oracle", "seeded"):
             assert case.code_path is not None
             body = texts.get(case.code_path)
             if body is None:
@@ -256,18 +450,23 @@ class ContextBuilder:
                 # context under the oracle arm's label.
                 missing.append(case.code_path)
             else:
-                text, cut = _truncate(body, CODE_BUDGET)
+                text, cut = select_relevant(body, self.code_budget, wanted)
                 chosen.append(CodeFile(case.code_path, text, cut, rank=None))
-        else:
+        if arm in ("seeded", "retrieved"):
             ranked = self._ranker(case.repo, case.at_sha).rank(
                 case.doc_path, raw_doc, pool
             )
-            for position, path in enumerate(ranked[: self.k], start=1):
+            already = {c.path for c in chosen}
+            for position, path in enumerate(ranked, start=1):
+                if len(chosen) >= self.k:
+                    break
+                if path in already:
+                    continue
                 body = texts.get(path)
                 if body is None:
                     missing.append(path)
                     continue
-                text, cut = _truncate(body, CODE_BUDGET)
+                text, cut = select_relevant(body, self.code_budget, wanted)
                 chosen.append(CodeFile(path, text, cut, rank=position))
 
         return JudgeContext(

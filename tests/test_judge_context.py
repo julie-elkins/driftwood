@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 
+from driftwood.judge import context as context_module
 from driftwood.judge.cases import JudgeCase
 from driftwood.judge.context import (
     CODE_BUDGET,
@@ -25,6 +26,7 @@ from driftwood.judge.context import (
     JudgeContext,
     context_hash,
     render,
+    select_relevant,
 )
 from driftwood.mining.gitio import local_name_for
 
@@ -214,6 +216,161 @@ class TestThingsThatVanish:
         assert not context.usable
 
 
+class TestCodeIsWindowedRatherThanHeadTruncated:
+    """What the judge is shown of a file it cannot be shown all of.
+
+    29 of the 45 oracle files in the first paid run were over the 6,000-character
+    budget, and head-truncation showed the judge the first eighth of the module. Three
+    of the ten `drift` abstentions gave that as their reason in so many words -- "the
+    relevant classes ... are truncated out of the provided models.py excerpt". A budget
+    is unavoidable; taking the front of the file is not.
+    """
+
+    def _file(self, hits_at: int, total: int = 400) -> str:
+        lines = [f"def filler_{i}():\n    return {i}\n" for i in range(total)]
+        lines[hits_at] = "def parse_headers(raw):\n    return HeaderDict(raw)\n"
+        return "".join(lines)
+
+    def test_a_match_late_in_the_file_survives_the_budget(self):
+        # The exact failure. Head-truncation keeps line 0 and loses line 380; the point
+        # of selection is that where the match sits in the file stops mattering.
+        text = self._file(hits_at=380)
+        budget = len(text) // 8
+        shown, cut = select_relevant(text, budget, {"parse_headers", "headerdict"})
+        assert cut
+        assert "parse_headers" in shown
+        assert len(shown) < len(text)
+
+    def test_the_enclosing_signature_comes_with_the_match(self):
+        # A hit inside a body with its `def` line cut away cannot answer "does this
+        # parameter exist", which is most of what documentation claims.
+        body = "".join(f"def filler_{i}():\n    return {i}\n" for i in range(300))
+        text = body + "def configure(timeout=30):\n" + "    x = 1\n" * 40 + "    return timeout\n"
+        shown, cut = select_relevant(text, len(text) // 6, {"timeout"})
+        assert cut
+        assert "def configure(timeout=30):" in shown
+
+    def test_it_says_how_much_it_dropped_and_why(self):
+        text = self._file(hits_at=200)
+        shown, _cut = select_relevant(text, len(text) // 8, {"parse_headers"})
+        assert "line(s) elided" in shown
+        # The reason matters as much as the count: a judge that sees an elision marker
+        # and knows the elided lines matched nothing can rule out "it was cut away",
+        # which is the abstention this whole change exists to remove.
+        assert "mention none of them" in shown
+
+    def test_a_file_inside_the_budget_is_returned_whole_and_unmarked(self):
+        text = "def f():\n    return 1\n"
+        assert select_relevant(text, 10_000, {"whatever"}) == (text, False)
+
+    def test_the_head_is_kept_even_when_it_matches_nothing(self):
+        text = ('"""Module docstring."""\nimport os\nimport sys\n'
+                + "".join(f"def filler_{i}():\n    return {i}\n" for i in range(400))
+                + "def parse_headers(raw):\n    return raw\n")
+        shown, _cut = select_relevant(text, len(text) // 8, {"parse_headers"})
+        assert "Module docstring" in shown and "import os" in shown
+
+    def test_nothing_matching_still_returns_something_readable(self):
+        # A document sharing no identifier with the file is the common case for a low
+        # coverage score, and it must not produce an empty context: `usable` would still
+        # be True and the judge would be asked about a file it was shown none of.
+        text = self._file(hits_at=10)
+        shown, cut = select_relevant(text, len(text) // 8, {"nothing_here_at_all"})
+        assert cut
+        assert shown.strip()
+        assert "def filler_0" in shown
+
+    def test_a_definition_outranks_a_denser_list_of_mentions(self):
+        # The first version of this scored lines by raw identifier count, and that is the
+        # project's own lesson pointed back at it: `requests/__init__.py` scores ~100%
+        # coverage while implementing nothing, because presence is not definition. One
+        # `__all__` line naming six identifiers outscored six `def` lines defining them,
+        # so the budget bought the part of the module that names everything and defines
+        # nothing. Measured: unweighted, 5 of 29 real cut files came out WORSE than
+        # head-truncation, `src/flask/app.py` from 100% coverage to 0%.
+        wanted = {"parse", "render", "build", "encode", "decode", "verify"}
+        mentions = '__all__ = ["parse", "render", "build", "encode", "decode", "verify"]\n'
+        filler = "".join(f"def filler_{i}():\n    return {i}\n" for i in range(300))
+        text = filler[:200] + mentions + filler + "def verify(cert):\n    return cert\n"
+        shown, cut = select_relevant(text, len(text) // 8, wanted)
+        assert cut
+        assert "def verify(cert):" in shown, "the definition must win the budget"
+
+    def test_an_import_line_never_buys_a_window_of_its_own(self):
+        # Scored at zero rather than merely low. A re-export block is the densest possible
+        # match and the least informative: every name on it is defined somewhere else.
+        text = ("".join(f"def filler_{i}():\n    return {i}\n" for i in range(300))
+                + "from .models import Response, Request, Session\n"
+                + "".join(f"def other_{i}():\n    return {i}\n" for i in range(300)))
+        shown, _cut = select_relevant(text, len(text) // 10, {"Response", "Request", "Session"})
+        assert "from .models import" not in shown
+
+    def test_it_is_never_worse_than_the_truncation_it_replaced(self):
+        # A file whose relevant definitions sit in the first eighth, with a denser run of
+        # mentions further down. Windowing would spend the budget on the mentions and drop
+        # definitions the head included for free -- observed on 3 of 29 real files. The
+        # guard compares the two on the document's own identifiers, which is a signal the
+        # selector is already allowed to see; comparing on the drifted sentence instead
+        # would choose the better arm using the answer.
+        head = "def parse(raw):\n    return Token(raw)\n" * 3
+        tail = "".join(f"# mentions parse and Token here {i}\n" for i in range(4000))
+        text = head + tail
+        wanted = {"parse", "Token"}
+        shown, cut = select_relevant(text, 600, wanted)
+        assert cut
+        assert "def parse(raw):" in shown
+
+
+class TestTheSeededArm:
+    """The arm that does what the oracle arm was built to do.
+
+    `oracle` shows one file, and the judge's own reasons say one file is not enough:
+    seven of its ten `drift` abstentions were "the relevant implementation is not in this
+    module". Guaranteeing the known file is present *and* giving it the rest of k
+    separates judging from retrieval without also testing whether a page can be answered
+    from a single module.
+    """
+
+    def test_it_shows_the_commits_own_file_first_and_then_retrieved_ones(self, tiny_repo):
+        root, parent, fix = tiny_repo
+        context = ContextBuilder(root, k=3).build(_case(parent, fix), "seeded")
+        assert context.code_files[0].path == "src/client.py"
+        assert context.code_files[0].rank is None
+        assert len(context.code_files) > 1, "the whole point is more than one file"
+        assert all(c.rank is not None for c in context.code_files[1:])
+
+    def test_the_oracle_file_is_not_shown_twice(self, tiny_repo):
+        # It is both the seed and, usually, retrieval's top hit. Showing it twice would
+        # spend half the budget on a duplicate and inflate every coverage number.
+        root, parent, fix = tiny_repo
+        context = ContextBuilder(root, k=3).build(_case(parent, fix), "seeded")
+        paths = [c.path for c in context.code_files]
+        assert len(paths) == len(set(paths))
+
+    def test_k_is_the_total_and_not_k_plus_the_seed(self, tiny_repo):
+        root, parent, fix = tiny_repo
+        context = ContextBuilder(root, k=2).build(_case(parent, fix), "seeded")
+        assert len(context.code_files) <= 2
+
+    def test_it_refuses_a_case_with_no_code_side(self, tiny_repo):
+        root, parent, fix = tiny_repo
+        case = _case(parent, fix, shape="B", code_path=None)
+        with pytest.raises(ValueError, match="shape A only"):
+            ContextBuilder(root).build(case, "seeded")
+
+    def test_nothing_from_the_fix_leaks_into_it_either(self, tiny_repo):
+        # The leak tests are per-arm because `render` is per-arm, and a new arm is a new
+        # path to a model. The selection signal is the DOCUMENT's identifiers; if it ever
+        # became `shared_identifiers` -- the fix's own evidence, which names the drifted
+        # sentence -- this arm would quietly start scoring very well indeed.
+        root, parent, fix = tiny_repo
+        text = render(ContextBuilder(root, k=3).build(_case(parent, fix), "seeded"))
+        assert LEAKY_SUBJECT not in text
+        assert fix not in text
+        for identifier in LEAKY_IDENTIFIERS:
+            assert identifier not in text
+
+
 class TestTruncation:
     def test_a_long_document_is_cut_and_says_so(self, tiny_repo):
         root, parent, fix = tiny_repo
@@ -360,3 +517,127 @@ class TestTheCacheKey:
             self._context(), "p", "m", request={"output_config": {}, "max_tokens": 1}
         )
         assert a == b
+
+
+class TestTheCodeBudgetIsASweptParameter:
+    """`code_budget` moved from a constant read at the point of use to a builder
+    argument, because the budget turned out to be the lever.
+
+    Measured on the 5 recall-costing cases whose answer-bearing definition was cut:
+    9,000 characters brings 2 of them on screen, 36,000 brings 4, and nothing in
+    between recovers anything further. That is a dimension to sweep, and sweeping it by
+    editing the module constant would change every later run's cache key invisibly.
+    """
+
+    def test_it_defaults_to_the_published_constant(self, tiny_repo):
+        # The default has to stay the value every score in `data/scores/` was produced
+        # at, or a re-run silently measures a different harness.
+        root, _parent, _fix = tiny_repo
+        assert ContextBuilder(root).code_budget == CODE_BUDGET
+
+    def test_the_seed_file_is_windowed_at_the_builders_budget(
+        self, tiny_repo, monkeypatch
+    ):
+        # Checked by capturing the argument rather than by measuring the output, because
+        # the fixture's files are shorter than `_HEAD_LINES` and so are returned whole at
+        # any budget. That is correct behaviour and it makes an output-shape assertion
+        # here vacuous -- it passed against the constant still being read at the call site.
+        root, parent, fix = tiny_repo
+        seen: list[int] = []
+        real = context_module.select_relevant
+        monkeypatch.setattr(
+            context_module,
+            "select_relevant",
+            lambda text, budget, wanted: (seen.append(budget), real(text, budget, wanted))[1],
+        )
+        ContextBuilder(root, code_budget=1234).build(_case(parent, fix), "oracle")
+        assert seen == [1234]
+
+    def test_the_retrieved_files_are_windowed_at_it_too(self, tiny_repo, monkeypatch):
+        # Two call sites in `build`, and the seeded arm goes through both. A budget
+        # honoured on the seed and ignored on the retrieved files would spend an
+        # unbounded amount on exactly the files nobody chose.
+        root, parent, fix = tiny_repo
+        seen: list[int] = []
+        real = context_module.select_relevant
+        monkeypatch.setattr(
+            context_module,
+            "select_relevant",
+            lambda text, budget, wanted: (seen.append(budget), real(text, budget, wanted))[1],
+        )
+        context = ContextBuilder(root, k=3, code_budget=1234).build(
+            _case(parent, fix), "seeded"
+        )
+        assert any(f.rank is not None for f in context.code_files), (
+            "the seeded arm must show retrieved files as well as the seed"
+        )
+        assert len(seen) == len(context.code_files) > 1
+        assert set(seen) == {1234}
+
+    def test_changing_it_changes_the_rendered_code_and_so_the_cache_key(self):
+        # The whole safety argument for making this a flag. The budget is not in the
+        # request dict, so it can only reach the key through the rendered context -- and
+        # if it did not, a run at a new budget would be served the old budget's replies
+        # and report them as a result for the new one.
+        body = "".join(
+            f"def thing_{n}(timeout):\n    return timeout\n\n\n" for n in range(60)
+        )
+        wanted = frozenset({"timeout"})
+        narrow, narrow_cut = select_relevant(body, 400, wanted)
+        wide, wide_cut = select_relevant(body, 1200, wanted)
+        assert narrow_cut and wide_cut
+        assert narrow != wide and len(narrow) < len(wide)
+
+        request = {"max_tokens": 6000}
+        def _context(text: str) -> JudgeContext:
+            return JudgeContext(
+                example_id="x", repo="r", arm="oracle", doc_path="d",
+                doc_text="the ``timeout`` argument", doc_truncated=False, at_sha="a",
+                code_files=(CodeFile("src/x.py", text, True, rank=None),),
+                pool_size=1,
+            )
+
+        assert context_hash(
+            _context(narrow), "p", "m", request=request
+        ) != context_hash(_context(wide), "p", "m", request=request)
+
+
+class TestTheDocumentBudgetIsASweptParameterToo:
+    """Added because 5 of 9 recall-costing cases had a cut document and nobody had asked
+    whether the cut removed the CLAIM.
+
+    It did, on 3 of them. `psf/requests docs/user/advanced.rst` is 38,830 characters and
+    the sentence the fixing commit deleted starts at character 22,461 -- so at
+    `DOC_BUDGET = 12,000` the false statement under test was not in the prompt at all, and
+    those cases were unanswerable rather than answered wrongly. Truncation was counted
+    from the first paid run; what it cut was not.
+    """
+
+    def test_it_defaults_to_the_published_constant(self, tiny_repo):
+        root, _parent, _fix = tiny_repo
+        assert ContextBuilder(root).doc_budget == DOC_BUDGET
+
+    def test_a_smaller_budget_cuts_the_document_and_says_so(self, tiny_repo):
+        # The doc side is head-truncated rather than windowed, so unlike the code side a
+        # short file does shrink -- and the flag it sets is what the eval reports.
+        root, parent, fix = tiny_repo
+        whole = ContextBuilder(root).build(_case(parent, fix), "oracle")
+        assert whole.doc_truncated is False
+
+        tight = ContextBuilder(root, doc_budget=30).build(_case(parent, fix), "oracle")
+        assert tight.doc_truncated is True
+        # On the prose, not on `len`: the marker explaining the cut is longer than the
+        # sentence it replaced on a page this small, so a length assertion would fail
+        # while the cut it is checking for had happened correctly.
+        assert "defaults to 5 seconds" in whole.doc_text
+        assert "defaults to 5 seconds" not in tight.doc_text
+        assert "truncated" in render(tight)
+
+    def test_it_is_independent_of_the_code_budget(self, tiny_repo):
+        # Two separate levers on two separate measured failures, and the probe that
+        # distinguishes them needs to move one without the other.
+        root, parent, fix = tiny_repo
+        builder = ContextBuilder(root, doc_budget=30, code_budget=99_000)
+        context = builder.build(_case(parent, fix), "oracle")
+        assert context.doc_truncated is True
+        assert context.code_files[0].truncated is False
