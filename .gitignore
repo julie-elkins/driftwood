@@ -47,6 +47,15 @@ review/2c/text/
 *.key
 secrets.*
 
+# Agent configuration. `.claude/CLAUDE.md` is the project instructions for this repo, and it
+# is deliberately local: it exists partly to state what must NOT be published from here, which
+# is not itself a thing to publish. Ignored rather than left untracked because an untracked file
+# in a public repository is one careless `git add` from being outward-facing.
+#
+# That is the whole reason. This path is NOT a containment control: AGENTS.md is not preloaded as
+# project instructions on Claude Code 2.1.278, so a CLAUDE.md here suppresses nothing.
+.claude/
+
 # Never ignored, and worth saying why:
 #   review/*.md              -- the hand labels. Irreplaceable; every number
 #                               downstream is measured against them.
