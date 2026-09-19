@@ -816,11 +816,35 @@ the arm near 38% on shape A before a judge read a word, and an oracle-vs-retriev
 mostly have been that cap. k=5 buys 22 points for two more files; k=10 buys 27 more but shows
 seven distractors, and this arm's job is an end-to-end number rather than the best number.
 
-Two arms, fixed before any model ran. **Oracle** (45 cases) hands over the commit's own file and
-isolates judging skill from retrieval quality — not a product configuration, since in production
-nobody hands you the file. **Retrieved** (all 125) is the only arm that covers shape B and the
-only end-to-end number. A third diff-shown arm exists as a diagnostic ceiling and must never be
-reported as product performance.
+Three arms. Two were fixed before any model ran; the third was added after the first paid run,
+because reading the model's own reasons showed the first could not answer the question it was
+built to ask.
+
+**Oracle** (45 cases) hands over the commit's own file and nothing else — not a product
+configuration, since in production nobody hands you the file. It was built to isolate judging
+skill from retrieval quality and **it does not do that.** The judge abstained on 31 of 45, and on
+the 10 `drift` cases it abstained on its stated reason was one file being insufficient seven
+times: `requests/__init__.py` "merely imports these names", `setup.py` cannot speak to SOCKS
+support, `flask/testing.py` is not where `before_request` lives. A documentation page makes claims
+about a package and one module is not a package, so this arm's ceiling is file count rather than
+judging skill. Its number is kept rather than corrected.
+
+**Seeded** (45 cases) is what isolating judging from retrieval actually requires: the commit's own
+file *plus* retrieval's top hits up to k, so the known-relevant file is guaranteed present and a
+failure here cannot be retrieval missing it, while the judge still sees enough of the package to
+decide. A separate arm rather than a redefinition of `oracle`, because `oracle`'s number is
+already published in `data/scores/` and silently changing what a published arm means is worse than
+carrying a superseded one.
+
+**Retrieved** (all 125) is the only arm that covers shape B and the only end-to-end number. A
+fourth diff-shown arm exists as a diagnostic ceiling and must never be reported as product
+performance.
+
+Code files are **windowed rather than head-truncated** — `select_relevant` keeps the regions
+mentioning identifiers the document marks up. Same reason the seeded arm exists: 29 of the 45
+oracle files were over the 6,000-character budget, `flask/app.py` is 70,003 characters, and three
+of the ten `drift` abstentions named the cut as their reason. The selection signal is the document
+alone, which it has to be or this would be a leak rather than a retrieval step.
 
 ### Two fields on every record are the answer
 
