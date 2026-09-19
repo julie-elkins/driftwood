@@ -56,6 +56,13 @@ secrets.*
 # project instructions on Claude Code 2.1.278, so a CLAUDE.md here suppresses nothing.
 .claude/
 
+# IDE state. PyCharm rewrites `.idea/` constantly and some of what it puts there is
+# machine-specific rather than project-specific -- local interpreter paths, run
+# configurations, scratch state. Ignored for the same reason as the line above: an
+# untracked directory in a public repository is one careless `git add` from being
+# outward-facing, and this one reappears on its own every time the project is opened.
+.idea/
+
 # Never ignored, and worth saying why:
 #   review/*.md              -- the hand labels. Irreplaceable; every number
 #                               downstream is measured against them.
