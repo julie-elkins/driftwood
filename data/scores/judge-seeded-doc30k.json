@@ -1,0 +1,128 @@
+{
+  "arms": {
+    "seeded": {
+      "judges": {
+        "model:claude-sonnet-5": {
+          "abstained": 3,
+          "abstention_calibration": {
+            "abstained_on_held_out": 0,
+            "held_out": 0,
+            "held_out_rate": 0.0,
+            "lift": 0.0,
+            "scoreable_rate": 0.3333333333333333
+          },
+          "accuracy_all": 0.1111111111111111,
+          "accuracy_answered": 0.16666666666666666,
+          "by_repo": {
+            "encode/httpx": {
+              "f1": 1.0,
+              "n": 1,
+              "readable": false
+            },
+            "pallets/flask": {
+              "f1": 0.0,
+              "n": 3,
+              "readable": false
+            },
+            "psf/requests": {
+              "f1": 0.0,
+              "n": 5,
+              "readable": false
+            }
+          },
+          "by_shape": {
+            "A": {
+              "f1": 0.2857142857142857,
+              "n": 9,
+              "readable": false
+            }
+          },
+          "by_verdict": {
+            "drift": {
+              "abstain": 3,
+              "false": 1,
+              "not-false": 5
+            }
+          },
+          "confusion": {
+            "fn": 5,
+            "fp": 0,
+            "tn": 0,
+            "tp": 1
+          },
+          "f1": 0.2857142857142857,
+          "n": 9,
+          "precision": 1.0,
+          "recall": 0.16666666666666666,
+          "truncated": 2,
+          "unparsed": 2
+        }
+      },
+      "noise_range": {
+        "accuracy_all": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "f1": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "precision": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      }
+    }
+  },
+  "generated_at": "2026-09-19T15:54:11+00:00",
+  "provenance": {
+    "arms": [
+      "seeded"
+    ],
+    "balance": {
+      "held_out_unclear": 0,
+      "majority_accuracy": 1.0,
+      "majority_class": "false",
+      "negative": 0,
+      "positive": 9,
+      "positive_rate": 1.0,
+      "scoreable": 9
+    },
+    "code_budget": 6000,
+    "corpus": {
+      "cases": 125,
+      "from_frozen": 125,
+      "from_ignored_versions": 0,
+      "held_out_unclear": 20,
+      "scoreable": 105,
+      "sheets": 7,
+      "verdicts": 125,
+      "with_code_path": 45
+    },
+    "doc_budget": 30000,
+    "judges": [
+      "model:claude-sonnet-5"
+    ],
+    "k": 5,
+    "limit": 0,
+    "majority_class_floor_accuracy": 1.0,
+    "min_readable_cell": 10,
+    "null_trials": 200,
+    "only_cases": [
+      "04a332fe0dc498cc",
+      "0eea9dc58ea4a754",
+      "3b7710af3aaa1c49",
+      "65463185f227a96c",
+      "756ac020b878f26e",
+      "884f8d4776cb8b02",
+      "d0f54d7f2b930191",
+      "e7df72235ade950f",
+      "f6ff7af97ac3c31c"
+    ],
+    "primary_metric": "f1_positive_class",
+    "repos": "all"
+  }
+}
