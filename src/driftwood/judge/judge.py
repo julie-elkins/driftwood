@@ -219,11 +219,17 @@ class Judgement:
     # Scored as an abstention and counted separately: a parse failure silently
     # becoming "not-false" would earn free credit on 75 of 105 cases.
     unparsed: bool = False
-    # The reply hit the token ceiling, so there was no answer to parse. A DIFFERENT
-    # failure from `unparsed` and separated from it on purpose: `unparsed` says the
-    # model answered something unreadable, `truncated` says the harness did not let it
-    # answer. Folding the second into the first is how a budget mistake gets reported
-    # as a judge with no signal. Counted, warned about, and never silent.
+    # A reply hit the token ceiling. A DIFFERENT failure from `unparsed` and separated
+    # from it on purpose: `unparsed` says the model answered something unreadable,
+    # `truncated` says the harness did not let it answer. Folding the second into the
+    # first is how a budget mistake gets reported as a judge with no signal. Counted,
+    # warned about, and never silent.
+    #
+    # This said "so there was no answer to parse", which made it sound like `truncated`
+    # implies `answer is None`. It does for the per-page judge. For the per-claim judge a
+    # page of six batches that loses one still answers from the other five, so the two
+    # flags are independent and `score` counts them independently -- see the note on
+    # `Scores.truncated`, and the negative count that got printed before it did.
     truncated: bool = False
     stop_reason: str | None = None
     cached: bool = False

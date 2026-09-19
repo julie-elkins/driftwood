@@ -795,3 +795,77 @@ class TestLocating:
         assert not locates(None, ("connect",))
         assert not locates("", ("connect",))
         assert not locates("anything", ("",))
+
+
+class TestATruncatedBatchIsNotCountedAsAnUnparsedReply:
+    """`truncated` was documented as a subset of `unparsed`, and the report subtracted.
+
+    True while one reply meant one case. This judge breaks it: a page of six batches that
+    loses one to the ceiling is still answered by the other five, so `unparsed` stays 0
+    while `truncated` is 1, and `unparsed - truncated` went negative. The real run printed
+    `WARNING: -2 reply/replies could not be parsed`, which is the tool for finding false
+    claims about code making one on screen. Nothing is derived by subtraction now, and
+    these pin both halves rather than the comment asserting the invariant again.
+    """
+
+    def _judgement(self, **overrides) -> Judgement:
+        base = dict(
+            example_id="aaa", arm="seeded", judge="per-claim/8:m",
+            answer=True, claim="c", code=None, reason="r", cached=False,
+        )
+        base.update(overrides)
+        return Judgement(**base)  # type: ignore[arg-type]
+
+    def test_truncated_but_answered_does_not_go_into_the_unparsed_warning(self):
+        cases = [_case("aaa", "drift")]
+        got = score(cases, {"aaa": self._judgement(truncated=True, unparsed=False)})
+        assert got.truncated == 1
+        assert got.unparsed == 0
+        # The number the WARNING line prints. Negative here was the whole bug.
+        assert got.unparsed_only == 0
+        assert got.truncated_answered == 1
+
+    def test_the_warning_counts_replies_unreadable_for_any_other_reason(self):
+        cases = [_case("aaa", "drift")]
+        got = score(cases, {"aaa": self._judgement(answer=None, unparsed=True)})
+        assert got.unparsed_only == 1
+        assert got.truncated == 0
+
+    def test_unreadable_because_of_the_ceiling_is_not_double_reported(self):
+        # The per-page shape, which still has to behave as it did: a reply cut off before
+        # answering is truncated AND unparsed, and the WARNING must not also claim it.
+        cases = [_case("aaa", "drift")]
+        got = score(
+            cases, {"aaa": self._judgement(answer=None, unparsed=True, truncated=True)}
+        )
+        assert got.truncated == 1
+        assert got.unparsed == 1
+        assert got.unparsed_only == 0
+        assert got.truncated_answered == 0
+
+    def test_no_count_can_go_negative_over_a_mixed_set(self):
+        cases = [_case(i, "drift") for i in ("aaa", "bbb", "ccc", "ddd")]
+        got = score(cases, {
+            "aaa": self._judgement(truncated=True),                      # answered anyway
+            "bbb": self._judgement(answer=None, unparsed=True),           # malformed
+            "ccc": self._judgement(answer=None, unparsed=True, truncated=True),
+            "ddd": self._judgement(),                                     # clean
+        })
+        assert (got.truncated, got.truncated_answered) == (2, 1)
+        assert (got.unparsed, got.unparsed_only) == (2, 1)
+        for field in ("truncated", "truncated_answered", "unparsed", "unparsed_only"):
+            assert getattr(got, field) >= 0
+
+    def test_the_report_says_the_surviving_verdicts_rest_on_fewer_claims(self):
+        from driftwood.judge.evaluate import format_results
+
+        cases = [_case("aaa", "drift"), _case("bbb", "cosmetic")]
+        text = format_results(cases, {"per-claim/8:m": {
+            "aaa": self._judgement(truncated=True),
+            "bbb": self._judgement(answer=None, unparsed=True, truncated=True),
+        }}, arm="seeded")
+        assert "NOT A RESULT" in text
+        assert "could not be parsed" not in text
+        assert "-1" not in text and "-2" not in text
+        assert "rest on fewer claims than the page has" in text
+        assert "1 still produced a page verdict" in text and "1 did not" in text

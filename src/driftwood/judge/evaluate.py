@@ -180,12 +180,28 @@ class Scores:
     fp: int
     fn: int
     tn: int
-    # A subset of `unparsed`: replies that hit the token ceiling, so the model was never
-    # allowed to answer. Tracked separately because it is a harness fault and the rest
-    # of `unparsed` is not, and because a run with any of these is not a result. The
-    # first model run had 16 of 45 and reported F1 0.00 without saying so in the table.
-    # Defaulted, and therefore last: the floors construct `Scores` without it.
+    # Cases where at least one reply hit the token ceiling, so the model was not allowed
+    # to finish. A harness fault rather than a judgement, and a run with any of these is
+    # not a result: the first model run had 16 of 45 and reported F1 0.00 without saying
+    # so in the table. Defaulted, and therefore last: the floors construct `Scores`
+    # without these three.
+    #
+    # This was documented as "a subset of `unparsed`" and the report subtracted it from
+    # `unparsed` on that basis. True of the per-page judge, where one reply is one case,
+    # and FALSE of the per-claim judge, where one truncated batch out of six leaves the
+    # case answered by the other five -- so `unparsed` stayed 0 while `truncated` was 2
+    # and the report printed "-2 replies could not be parsed". A negative count, printed
+    # by the tool for finding false claims about code, from an invariant a new caller
+    # broke without the comment asserting it ever being rechecked. Nothing is derived by
+    # subtraction now; each is counted where it happens.
     truncated: int = 0
+    # Unreadable for a reason that is NOT the ceiling -- malformed JSON, a verdict word
+    # nobody recognises. What the WARNING line counts.
+    unparsed_only: int = 0
+    # Truncated and yet still produced a page verdict, which only a batched judge can do.
+    # Reported because the verdict rests on fewer claims than the page has, and a row
+    # computed from it is partial evidence rather than a broken instrument.
+    truncated_answered: int = 0
 
     @property
     def precision(self) -> float:
@@ -230,6 +246,7 @@ def score(cases: list[JudgeCase], judgements: dict[str, Judgement]) -> Scores:
     separately and the results JSON records both.
     """
     tp = fp = fn = tn = answered = abstained = unparsed = truncated = 0
+    unparsed_only = truncated_answered = 0
     n = 0
     for case in cases:
         if not case.scoreable:
@@ -238,10 +255,15 @@ def score(cases: list[JudgeCase], judgements: dict[str, Judgement]) -> Scores:
         if found is None:
             continue
         n += 1
+        was_truncated = bool(getattr(found, "truncated", False))
         if found.unparsed:
             unparsed += 1
-        if getattr(found, "truncated", False):
+            if not was_truncated:
+                unparsed_only += 1
+        if was_truncated:
             truncated += 1
+            if found.answer is not None:
+                truncated_answered += 1
         if found.answer is None:
             abstained += 1
             continue
@@ -256,7 +278,8 @@ def score(cases: list[JudgeCase], judgements: dict[str, Judgement]) -> Scores:
             tn += 1
     return Scores(
         n=n, answered=answered, abstained=abstained, unparsed=unparsed,
-        truncated=truncated, tp=tp, fp=fp, fn=fn, tn=tn,
+        truncated=truncated, unparsed_only=unparsed_only,
+        truncated_answered=truncated_answered, tp=tp, fp=fp, fn=fn, tn=tn,
     )
 
 
@@ -511,16 +534,28 @@ def format_results(
             # the model was cut off before answering, on the longest prompts, which are
             # also the hard cases -- so the damage is concentrated on the positives and
             # the F1 it produces is not low, it is meaningless.
+            lost = got.truncated - got.truncated_answered
             lines.append(
-                f"  NOT A RESULT: {got.truncated} of {got.n} reply/replies hit the "
-                "token ceiling and never answered. Truncation tracks prompt length, so "
-                "these are the hard cases, not a random sample. Raise --max-tokens and "
-                "re-run before reading anything below."
+                f"  NOT A RESULT: {got.truncated} of {got.n} case(s) had a reply hit the "
+                "token ceiling. Truncation tracks prompt length, so these are the hard "
+                "cases, not a random sample. Raise --max-tokens and re-run before "
+                "reading anything below."
             )
-        if got.unparsed - got.truncated:
+            if got.truncated_answered:
+                # Only a batched judge reaches here, and the distinction is the whole
+                # reason this is counted rather than derived: the case HAS a verdict, so
+                # it is not an abstention and not a hole in the table, but that verdict
+                # was reached from the batches that survived. Partial evidence scored as
+                # if it were whole, which is quieter than a missing answer and worse.
+                lines.append(
+                    f"    of those, {got.truncated_answered} still produced a page "
+                    f"verdict from their remaining batches and {lost} did not; the "
+                    "verdicts rest on fewer claims than the page has"
+                )
+        if got.unparsed_only:
             lines.append(
-                f"  WARNING: {got.unparsed - got.truncated} reply/replies could not be "
-                "parsed as a verdict; each was scored as an abstention, not as not-false"
+                f"  WARNING: {got.unparsed_only} reply/replies could not be parsed as a "
+                "verdict; each was scored as an abstention, not as not-false"
             )
 
         matrix = confusion(cases, judgements)
@@ -613,10 +648,15 @@ def to_json(
                 "accuracy_answered": got.accuracy_answered,
                 "abstained": got.abstained,
                 "unparsed": got.unparsed,
+                "unparsed_only": got.unparsed_only,
                 # In the file as well as on screen: a saved result with this above zero
                 # is not comparable to one without, and a score history that cannot tell
                 # them apart would plot a harness bug as a regression.
                 "truncated": got.truncated,
+                # Distinguishes a batched judge's partial verdict from a missing one, and
+                # it is in the file because the difference is invisible later otherwise:
+                # both leave `truncated` above zero, only one leaves a row that computed.
+                "truncated_answered": got.truncated_answered,
                 "confusion": {"tp": got.tp, "fp": got.fp, "fn": got.fn, "tn": got.tn},
                 "by_verdict": {
                     k: dict(v) for k, v in confusion(cases, judgements).items()
