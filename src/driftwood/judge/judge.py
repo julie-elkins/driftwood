@@ -156,6 +156,13 @@ class Judgement:
     # pre-run estimate can be checked against the outcome rather than believed.
     input_tokens: int | None = None
     output_tokens: int | None = None
+    # The ceiling this reply was actually produced under, and whether that was a raised
+    # one. Recorded because a run may legitimately mix ceilings -- a complete reply is
+    # unaffected by a ceiling it never reached, so it is reused rather than re-paid --
+    # and a mixed run has to be able to SAY it is mixed. Without these two fields the
+    # reuse argument would be untestable from the output, which is the same as untrue.
+    max_tokens_used: int | None = None
+    retried: bool = False
 
     @property
     def abstained(self) -> bool:
@@ -314,6 +321,7 @@ class AnthropicJudge:
         model: str = DEFAULT_JUDGE_MODEL,
         cache_dir: Path | None = None,
         max_tokens: int = DEFAULT_MAX_TOKENS,
+        retry_max_tokens: int | None = None,
         effort: str | None = None,
         system: str = SYSTEM_PROMPT,
         client=None,
@@ -321,6 +329,20 @@ class AnthropicJudge:
         self.model = model
         self.system = system
         self.max_tokens = max_tokens
+        # The ceiling a TRUNCATED reply is retried at, and the reason it exists is
+        # arithmetic. `max_tokens` is inside the cache key, so raising it invalidates
+        # every reply already paid for: fixing the 4 replies that hit the ceiling on the
+        # 45-case seeded run would have re-paid the other 41 as well, ~$3 to repair
+        # ~$0.25 of damage. On the 125-case retrieved arm the same mistake costs ~$6.
+        #
+        # What makes retrying only the truncated ones sound rather than a fudge is that
+        # `max_tokens` is NOT a behavioural setting -- it is a ceiling. A reply that
+        # stopped on `end_turn` after 1,800 tokens is byte-identical whether the ceiling
+        # it never approached was 6,000 or 12,000, so reusing it alongside a retried
+        # reply is not mixing two instruments. That holds only while every reply that DID
+        # hit its ceiling gets re-requested, which is why `judge()` escalates rather than
+        # reporting the truncated reply, and why the CLI counts both numbers out loud.
+        self.retry_max_tokens = retry_max_tokens
         # None means "whatever the API does by default", which is what the first run
         # measured. Left unset rather than pinned to a value, because a default is the
         # honest thing to report a judge's behaviour at -- and because the one
@@ -332,9 +354,27 @@ class AnthropicJudge:
         self.cache_dir = cache_dir
         if cache_dir is not None:
             cache_dir.mkdir(parents=True, exist_ok=True)
-        if client is not None:
-            self._client = client
-        else:
+        # Stored, not constructed. The client is built on the first cache MISS, which is
+        # the first moment a key is actually needed, so a fully-cached run reads back
+        # without credentials. That is not a convenience: the cache is the record of what
+        # a paid run returned, this repository is public, and a result nobody can re-read
+        # without a key of their own is a result on trust. It also makes the free
+        # diagnostics in `scripts/` free in fact rather than just in intent.
+        #
+        # What this gives up is fail-fast. A keyless run now builds every context before
+        # it discovers there is no key, instead of refusing at construction. That costs
+        # seconds -- the builder's three caches make the whole 45-case build near
+        # instant -- and `preflight()` is there for any caller that would rather know up
+        # front. The CLI deliberately does not call it, because re-scoring a cached arm
+        # is a thing to be able to do on a plane.
+        self._client = client
+
+    def preflight(self) -> None:
+        """Construct the client now, so a missing key fails before any work is done."""
+        self._ensure_client()
+
+    def _ensure_client(self):
+        if self._client is None:
             if not os.environ.get("ANTHROPIC_API_KEY"):
                 # `floors` is a real `--judges` value, and it was not when this message
                 # was written: it said to run `--judges floors` while argparse would
@@ -367,40 +407,77 @@ class AnthropicJudge:
                 ) from exc
 
             self._client = Anthropic()
+        return self._client
 
     def _cache_path(self, key: str) -> Path | None:
         if self.cache_dir is None:
             return None
         return self.cache_dir / f"{key}.json"
 
-    def _request(self) -> dict:
+    def _request(self, max_tokens: int | None = None) -> dict:
         """The call, minus the per-case parts. Also what goes into the cache key.
 
         Built in one place and used twice, so the request that was sent and the request
         the key was computed from cannot disagree. `effort` is omitted rather than sent
         as None, so that an unset effort hashes to the same key it did before the option
         existed and does not invalidate a cache for a setting nobody chose.
+
+        `max_tokens` defaults to this judge's own ceiling. It is a parameter so the retry
+        ladder can key and send a raised ceiling without building a second judge, and so
+        that an unset argument reproduces the pre-retry key exactly.
         """
-        request: dict = {"max_tokens": self.max_tokens}
+        request: dict = {"max_tokens": self.max_tokens if max_tokens is None else max_tokens}
         if self.effort is not None:
             request["output_config"] = {"effort": self.effort}
         return request
 
+    def _ceilings(self) -> list[int]:
+        """Token ceilings to consider, cheapest-cached first.
+
+        Ascending, and deduplicated: a `--retry-max-tokens` at or below `--max-tokens`
+        would otherwise add a second identical key and a second identical call.
+        """
+        ladder = [self.max_tokens]
+        if self.retry_max_tokens and self.retry_max_tokens > self.max_tokens:
+            ladder.append(self.retry_max_tokens)
+        return ladder
+
     def judge(self, context: JudgeContext) -> Judgement:
         prompt = render(context)
-        request = self._request()
-        key = context_hash(context, self.system, self.model, request=request)
-        path = self._cache_path(key)
-        if path is not None and path.exists():
+        # Walk the ladder cheapest-first and reuse the first COMPLETE cached reply. A
+        # truncated one is not a usable answer, so it does not stop the walk -- it is the
+        # thing the next rung exists to replace.
+        ceilings = self._ceilings()
+        # Every rung whose cached reply died at its ceiling, not just the last one seen.
+        # `retried` is then "a LOWER ceiling was tried and died", which is what the word
+        # means and is not the same as "served above the base rung": a fresh case is sent
+        # at the top rung and was never re-asked at all. Keyed by rung rather than kept as
+        # a single value because both rungs can hold a truncation at once, and collapsing
+        # them made a first-ever run at a raised ceiling report itself as a retry.
+        truncated_cached: dict[int, dict] = {}
+
+        def was_retried(at: int) -> bool:
+            return any(rung < at for rung in truncated_cached)
+
+        for ceiling in ceilings:
+            key = context_hash(
+                context, self.system, self.model, request=self._request(ceiling)
+            )
+            path = self._cache_path(key)
+            if path is None or not path.exists():
+                continue
             payload = json.loads(path.read_text(encoding="utf-8"))
+            if payload.get("stop_reason") == "max_tokens":
+                truncated_cached[ceiling] = payload
+                continue
             raw = payload["text"]
             answer, claim, code, reason, unparsed = _parse(raw)
-            stop_reason = payload.get("stop_reason")
             return Judgement(
                 example_id=context.example_id, arm=context.arm, judge=self.name,
                 answer=answer, claim=claim, code=code, reason=reason,
                 unparsed=unparsed, cached=True,
-                truncated=stop_reason == "max_tokens", stop_reason=stop_reason,
+                truncated=False, stop_reason=payload.get("stop_reason"),
+                max_tokens_used=ceiling, retried=was_retried(ceiling),
                 # `.get`, because entries written before usage was recorded have no
                 # such key. Absent is reported as unknown, never as zero -- a missing
                 # count summed as zero would make a cached run look free.
@@ -408,10 +485,40 @@ class AnthropicJudge:
                 output_tokens=payload.get("output_tokens"),
             )
 
+        # Nothing complete on disk. Send at the HIGHEST ceiling rather than the lowest,
+        # and this is free rather than generous: output tokens are billed on what the
+        # model actually produces, not on the ceiling it was allowed. A raised ceiling
+        # costs nothing on a reply that stops early, so trying the low rung first would
+        # only buy a second call for the hard cases.
+        ceiling = ceilings[-1]
+        request = self._request(ceiling)
+        key = context_hash(context, self.system, self.model, request=request)
+        path = self._cache_path(key)
+        if ceiling in truncated_cached:
+            # The top of the ladder is on disk and died there. Return it as truncated
+            # rather than calling again: a second identical request would be paid for and
+            # would hit the same ceiling. Raise --retry-max-tokens further.
+            payload = truncated_cached[ceiling]
+            answer, claim, code, reason, unparsed = _parse(payload["text"])
+            return Judgement(
+                example_id=context.example_id, arm=context.arm, judge=self.name,
+                answer=answer, claim=claim, code=code, unparsed=unparsed, cached=True,
+                reason=(
+                    f"TRUNCATED at {ceiling} tokens, the highest ceiling on the ladder "
+                    f"(blocks: {', '.join(payload.get('blocks') or []) or 'none'}). "
+                    "Still a harness failure, not an abstention -- raise "
+                    "--retry-max-tokens further."
+                ),
+                truncated=True, stop_reason="max_tokens",
+                max_tokens_used=ceiling, retried=was_retried(ceiling),
+                input_tokens=payload.get("input_tokens"),
+                output_tokens=payload.get("output_tokens"),
+            )
+
         # Every argument here is accepted by the installed SDK's signature, asserted
         # against it in the tests, because a stub client accepts arguments the API does
         # not. Nothing sampling-related is sent; see the class docstring.
-        response = self._client.messages.create(
+        response = self._ensure_client().messages.create(
             model=self.model,
             system=self.system,
             messages=[{"role": "user", "content": prompt}],
@@ -453,14 +560,18 @@ class AnthropicJudge:
         if stop_reason == "max_tokens":
             # Said in the reason field too, not just counted, because this is the line a
             # reader sees next to the case when they go looking for why it abstained.
+            # Names the ceiling that was actually sent, not `self.max_tokens`, which is
+            # the lowest rung and is not what this call used when the ladder escalated.
             reason = (
-                f"TRUNCATED: the reply hit the {self.max_tokens}-token ceiling "
+                f"TRUNCATED: the reply hit the {ceiling}-token ceiling "
                 f"(blocks: {', '.join(kinds) or 'none'}). This is a harness failure, "
-                "not an abstention -- raise --max-tokens and re-run."
+                "not an abstention -- raise --retry-max-tokens and re-run; only the "
+                "truncated replies are re-paid for."
             )
         return Judgement(
             example_id=context.example_id, arm=context.arm, judge=self.name,
             answer=answer, claim=claim, code=code, reason=reason, unparsed=unparsed,
             truncated=stop_reason == "max_tokens", stop_reason=stop_reason,
+            max_tokens_used=ceiling, retried=was_retried(ceiling),
             input_tokens=billed_in, output_tokens=billed_out,
         )

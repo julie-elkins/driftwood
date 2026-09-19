@@ -10,12 +10,13 @@ from __future__ import annotations
 
 import inspect
 import json
+import re
 from pathlib import Path
 
 import pytest
 
 from driftwood.judge.cases import JudgeCase, load_cases
-from driftwood.judge.context import CodeFile, JudgeContext
+from driftwood.judge.context import CodeFile, JudgeContext, context_hash
 from driftwood.judge.evaluate import (
     abstention_calibration,
     confusion,
@@ -357,11 +358,43 @@ class TestTheModelArm:
     def test_no_key_and_no_client_refuses_rather_than_scoring_nothing(self, monkeypatch):
         monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
         with pytest.raises(RuntimeError):
-            AnthropicJudge()
+            AnthropicJudge().judge(_context("c1"))
         # This used to assert `match="floors"`, which passed while the message named a
         # flag value argparse rejected. Whether the suggested command is runnable is
         # checked against the parser in `tests/test_judge_cli.py`; matching prose
         # against prose is what let the false instruction through.
+
+    def test_a_cached_reply_is_readable_with_no_key_at_all(self, tmp_path, monkeypatch):
+        """The record of a paid run must be re-readable by someone who has no key.
+
+        This repository is public and the replies are what every stage-3 number is
+        computed from, so a cache that can only be read by the person who paid for it
+        makes the result something you take on trust. It is also what lets the free
+        diagnostics in `scripts/` be free in fact: the abstention audit reads 45 replies
+        off disk, and it could not be run without a key while the client was built in
+        `__init__`.
+        """
+        # Populate the cache with a client, exactly as a paid run would.
+        warm = AnthropicJudge(client=_StubClient('{"verdict": "false", "claim": "c", '
+                                                '"code": "d", "reason": "r"}'),
+                              cache_dir=tmp_path, model="m")
+        first = warm.judge(_context("c1"))
+        assert first.answer is True and not first.cached
+
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        cold = AnthropicJudge(cache_dir=tmp_path, model="m")
+        again = cold.judge(_context("c1"))
+        assert again.cached is True
+        assert again.answer is True
+
+    def test_a_miss_with_no_key_still_refuses_rather_than_answering(self, tmp_path,
+                                                                   monkeypatch):
+        # The other half of the same change, and the one that would be a silent hole:
+        # laziness must not turn a missing key into a quiet abstention on every case.
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        cold = AnthropicJudge(cache_dir=tmp_path, model="m")
+        with pytest.raises(RuntimeError, match="ANTHROPIC_API_KEY"):
+            cold.judge(_context("never-cached"))
 
 
 class TestARunOutOfBudgetIsNotAnAbstention:
@@ -392,7 +425,24 @@ class TestARunOutOfBudgetIsNotAnAbstention:
         assert got.stop_reason == "max_tokens"
         # The reason field, not just a counter: this is the line a reader sees next to
         # the case when they go looking for why it abstained.
-        assert "TRUNCATED" in got.reason and "--max-tokens" in got.reason
+        assert "TRUNCATED" in got.reason
+        # It used to say "raise --max-tokens and re-run", which was true and expensive:
+        # `max_tokens` is inside the cache key, so that advice re-pays every reply already
+        # bought to repair the few that truncated. The advice now names the retry ceiling.
+        assert "--retry-max-tokens" in got.reason
+
+        # And the flag it names has to exist, which is this project's own recurring bug:
+        # the no-key message told readers to run `--judges floors` while argparse rejected
+        # it, and the test covering that message asserted the word rather than the flag.
+        # Read the parser instead of trusting the sentence.
+        import argparse
+
+        from driftwood.judge.cli import add_parser
+
+        parser = argparse.ArgumentParser(prog="driftwood")
+        add_parser(parser.add_subparsers(dest="command"))
+        for flag in re.findall(r"--[a-z-]+", got.reason):
+            parser.parse_args(["judge-eval", flag, "1"])
 
     def test_the_evidence_survives_on_disk(self, tmp_path):
         # The cache held `"text": ""` and nothing else for all 16, and an empty string is
@@ -443,6 +493,168 @@ class TestARunOutOfBudgetIsNotAnAbstention:
         # And it says why the damage is not random, because "1 of 1 truncated" invites
         # the reader to treat it as missing data rather than as biased data.
         assert "hard cases" in rendered
+
+
+class TestTheTruncationRetryLadder:
+    """Re-ask ONLY the replies that hit the ceiling, and pin the arithmetic that says so.
+
+    `max_tokens` is inside the cache key, so the obvious fix for a truncated reply --
+    raise `--max-tokens` and re-run -- invalidates every reply already paid for. On the
+    45-case seeded run that was 4 truncated replies out of 45: about $3 of re-purchase to
+    repair about $0.25 of damage, and about $6 on the 125-case retrieved arm.
+
+    What makes the cheap fix sound rather than a fudge is that `max_tokens` is a
+    CEILING, not a behavioural setting. A reply that stopped on `end_turn` at 1,800
+    tokens is byte-identical whether the ceiling it never approached was 6,000 or 12,000,
+    so serving it next to a retried reply is not mixing two instruments. That argument
+    holds only while every reply that DID hit its ceiling is re-requested, which is the
+    property this class exists to keep true -- and it is exactly the kind of claim that
+    rots silently, because a ladder that quietly stopped escalating would look like a
+    cheaper run rather than like a broken one.
+    """
+
+    _ANSWER = '{"verdict": "false", "claim": "c", "code": "d", "reason": "r"}'
+
+    def _warm(self, tmp_path, *, truncated: bool, retry: int | None = None):
+        """Populate the cache the way a prior run would have, and return the client."""
+        client = (
+            _StubClient("", stop_reason="max_tokens", block_type="thinking")
+            if truncated
+            else _StubClient(self._ANSWER)
+        )
+        AnthropicJudge(
+            client=client, cache_dir=tmp_path, model="m", max_tokens=6000,
+            retry_max_tokens=retry,
+        ).judge(_context("c1"))
+        return client
+
+    def test_a_complete_reply_at_the_low_ceiling_is_reused_rather_than_re_paid(
+        self, tmp_path
+    ):
+        # The whole point. Turning the retry on must not re-ask the 41 replies that were
+        # fine, and it must not shift their key -- `_request()` with no argument has to
+        # hash exactly the way it did before the option existed.
+        self._warm(tmp_path, truncated=False)
+        client = _StubClient(self._ANSWER)
+        got = AnthropicJudge(
+            client=client, cache_dir=tmp_path, model="m", max_tokens=6000,
+            retry_max_tokens=12000,
+        ).judge(_context("c1"))
+        assert client.calls == []
+        assert got.cached is True and got.answer is True
+        assert got.max_tokens_used == 6000
+        assert got.retried is False
+
+    def test_a_truncated_reply_is_re_asked_at_the_raised_ceiling(self, tmp_path):
+        self._warm(tmp_path, truncated=True)
+        client = _StubClient(self._ANSWER)
+        got = AnthropicJudge(
+            client=client, cache_dir=tmp_path, model="m", max_tokens=6000,
+            retry_max_tokens=12000,
+        ).judge(_context("c1"))
+        assert len(client.calls) == 1
+        assert client.calls[0]["max_tokens"] == 12000
+        assert got.answer is True and got.truncated is False
+        # Both fields, because the CLI reports "how many were re-asked" off `retried` and
+        # "under what ceiling" off `max_tokens_used`. A mixed run has to be able to say it
+        # is mixed, or the reuse argument above is untestable from the output.
+        assert got.retried is True
+        assert got.max_tokens_used == 12000
+
+    def test_a_fresh_case_goes_straight_to_the_highest_ceiling(self, tmp_path):
+        # Once, at the top rung, rather than a cheap attempt followed by an escalation.
+        # Output tokens are billed on what the model actually produces, not on the
+        # ceiling it was allowed, so the low rung buys nothing on an unseen case and
+        # costs a second call on every hard one.
+        client = _StubClient(self._ANSWER)
+        got = AnthropicJudge(
+            client=client, cache_dir=tmp_path, model="m", max_tokens=6000,
+            retry_max_tokens=12000,
+        ).judge(_context("fresh"))
+        assert len(client.calls) == 1
+        assert client.calls[0]["max_tokens"] == 12000
+        assert got.max_tokens_used == 12000
+        # NOT retried, and this is the assertion that caught the bug. `retried` was first
+        # written as "served above the base rung", which is true here and means nothing:
+        # a fresh case is sent at the top rung by design. Under that reading a first-ever
+        # run with --retry-max-tokens set would report all 125 replies as re-asked, and
+        # the CLI would print "125 reply/replies re-asked" about a run that re-asked
+        # nothing -- a false claim about the run, from the tool whose subject is false
+        # claims. It now means "a LOWER ceiling was tried and died".
+        assert got.retried is False
+
+    def test_a_reply_truncated_at_the_top_rung_is_not_paid_for_twice(self, tmp_path):
+        # The ladder has to terminate. A second identical request would be charged for
+        # and would hit the identical ceiling, so the answer is to say so and stop.
+        self._warm(tmp_path, truncated=True, retry=12000)
+        client = _StubClient(self._ANSWER)
+        got = AnthropicJudge(
+            client=client, cache_dir=tmp_path, model="m", max_tokens=6000,
+            retry_max_tokens=12000,
+        ).judge(_context("c1"))
+        assert client.calls == []
+        assert got.truncated is True and got.cached is True
+        assert got.max_tokens_used == 12000
+        # Warmed straight at the top rung, so nothing lower was ever tried: this reply
+        # died at a high ceiling rather than surviving a retry, and saying "re-asked"
+        # about it would misreport the run in the opposite direction.
+        assert got.retried is False
+        # It must say which ceiling it died at, because "raise --retry-max-tokens" is not
+        # actionable advice when the reader cannot see what it is already set to.
+        assert "12000" in got.reason and "--retry-max-tokens" in got.reason
+
+    def test_a_case_that_died_low_and_survived_high_is_the_one_called_retried(
+        self, tmp_path
+    ):
+        # The only shape that earns the word, and the shape the seeded arm is actually in:
+        # 6,000 on disk and truncated, 12,000 bought to replace it. Asserted through the
+        # cache rather than through the live call, because the number the CLI prints is
+        # read back on every later re-score of the same arm, not only on the paid run.
+        self._warm(tmp_path, truncated=True)
+        self._warm(tmp_path, truncated=False, retry=12000)
+        client = _StubClient("never reached")
+        got = AnthropicJudge(
+            client=client, cache_dir=tmp_path, model="m", max_tokens=6000,
+            retry_max_tokens=12000,
+        ).judge(_context("c1"))
+        assert client.calls == []
+        assert got.cached is True and got.answer is True and got.truncated is False
+        assert got.max_tokens_used == 12000 and got.retried is True
+
+    @pytest.mark.parametrize("retry", [None, 0, 1, 6000])
+    def test_a_retry_ceiling_at_or_below_the_base_adds_no_rung(self, tmp_path, retry):
+        # Otherwise `--retry-max-tokens 6000` against `--max-tokens 6000` would add a
+        # second identical key and a second identical call -- paying twice for the same
+        # request and then reporting the run as "1 reply re-asked".
+        judge = AnthropicJudge(
+            client=_StubClient(self._ANSWER), cache_dir=tmp_path, model="m",
+            max_tokens=6000, retry_max_tokens=retry,
+        )
+        assert judge._ceilings() == [6000]
+        got = judge.judge(_context("c1"))
+        assert got.retried is False and got.max_tokens_used == 6000
+
+    def test_enabling_the_retry_does_not_move_the_base_key(self, tmp_path):
+        """The cache-key trap, stated as an equality rather than as a comment.
+
+        26 paid replies were orphaned once already by a change to how the context is
+        rendered, and that was a change nobody thought of as touching the cache. The
+        retry option is a much easier version of the same mistake: if `_request()` grew
+        a `retry_max_tokens` entry, or if the base rung were keyed off the ladder rather
+        than off `max_tokens` alone, then merely *offering* the retry would re-pay for
+        every reply on disk.
+        """
+        plain = AnthropicJudge(cache_dir=tmp_path, model="m", max_tokens=6000)
+        with_retry = AnthropicJudge(
+            cache_dir=tmp_path, model="m", max_tokens=6000, retry_max_tokens=12000
+        )
+        assert plain._request() == with_retry._request() == {"max_tokens": 6000}
+        context = _context("c1")
+        assert context_hash(
+            context, SYSTEM_PROMPT, "m", request=plain._request()
+        ) == context_hash(
+            context, SYSTEM_PROMPT, "m", request=with_retry._request(6000)
+        )
 
 
 class TestTheCallMatchesTheInstalledSDK:

@@ -15,18 +15,25 @@ from __future__ import annotations
 
 import argparse
 import builtins
+import json
 import re
 import tomllib
 from pathlib import Path
 
 import pytest
 
+from driftwood.judge.cases import JudgeCase
 from driftwood.judge.cli import (
     FREE_JUDGES,
     JUDGE_CHOICES,
+    _cmd_eval,
     _expand_groups,
+    _expand_only_cases,
+    _judge_arg,
+    _model_from_judges,
     add_parser,
 )
+from driftwood.judge.context import CODE_BUDGET, DOC_BUDGET
 from driftwood.judge.evaluate import (
     CHARS_PER_TOKEN,
     estimate_spend,
@@ -53,19 +60,46 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _eval_parser() -> argparse.ArgumentParser:
+    return _parser()._subparsers._group_actions[0].choices["judge-eval"]
+
+
+def _provenance(payload: dict) -> dict:
+    """Read the provenance block off a written score file rather than a returned dict.
+
+    Through the file, because that is what a later session reads. A test on the dict
+    handed to `to_json` would pass on a field that never survived serialisation.
+    """
+    return payload["provenance"]
+
+
+def _judge_accepts(value: str) -> bool:
+    """Does `--judges` actually take this word? Asked by parsing it.
+
+    Was `set(action.choices)` until `--judges` grew a validator that also accepts
+    `model:<id>`, at which point `choices` became None and this helper raised instead of
+    reporting. Trying the parse is the version that does not care how the check is
+    implemented -- and it is what the callers below were really asking.
+    """
+    try:
+        _eval_parser().parse_args(["--judges", value])
+    except SystemExit:
+        return False
+    return True
+
+
 def _judge_choices() -> set[str]:
-    """What `--judges` actually accepts, read off the parser rather than restated."""
-    eval_parser = _parser()._subparsers._group_actions[0].choices["judge-eval"]
-    for action in eval_parser._actions:
-        if action.dest == "judges":
-            return set(action.choices)
-    raise AssertionError("judge-eval has no --judges argument")
+    """The documented choices that the parser really accepts."""
+    return {name for name in JUDGE_CHOICES if _judge_accepts(name)}
 
 
 def _no_key_message(monkeypatch) -> str:
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    # `preflight()` rather than construction: the client is built on the first cache
+    # miss now, so that a cached arm can be re-read with no key. The message is the
+    # same message and these tests are about its quality, not about when it fires.
     with pytest.raises(RuntimeError) as raised:
-        AnthropicJudge()
+        AnthropicJudge().preflight()
     return str(raised.value)
 
 
@@ -261,7 +295,7 @@ class TestTheMissingDependencyMessage:
 
         monkeypatch.setattr(builtins, "__import__", no_anthropic)
         with pytest.raises(RuntimeError) as raised:
-            AnthropicJudge()
+            AnthropicJudge().preflight()
         return str(raised.value)
 
     def test_it_explains_rather_than_raising_modulenotfounderror(self, monkeypatch):
@@ -326,3 +360,291 @@ class TestTheSystemPromptIsBilledToo:
             estimate_spend(["x" * 1000] * 3, system=SYSTEM_PROMPT, max_tokens=700)
         )
         assert "system prompt resent every call" in rendered
+
+
+class TestSelectingCasesByIdForACheapProbe:
+    """`--only-cases`, added so the 9 recall-costing cases can be re-asked for ~$0.57
+    instead of re-paying all 45 at ~$2.84.
+
+    The flag's danger is not cost, it is interpretation: the cases are chosen *because*
+    they failed, so the subset is selected on the outcome being measured and its F1 is
+    meaningless. These tests pin the guard rails rather than the plumbing.
+    """
+
+    def test_the_flag_exists_and_defaults_to_off(self):
+        args = _parser().parse_args(["judge-eval"])
+        assert args.only_cases is None
+
+    def test_it_takes_several_ids(self):
+        args = _parser().parse_args(["judge-eval", "--only-cases", "aaa", "bbb"])
+        assert args.only_cases == ["aaa", "bbb"]
+
+    def test_the_help_says_it_is_not_a_result(self):
+        for action in _eval_parser()._actions:
+            if action.dest == "only_cases":
+                assert "NOT A RESULT" in (action.help or "")
+                return
+        raise AssertionError("judge-eval has no --only-cases argument")
+
+    def test_an_at_file_is_read_one_id_per_line(self, tmp_path):
+        ids = tmp_path / "ids.txt"
+        ids.write_text("aaa\n\n# the two drift abstentions\nbbb\nccc  # trailing\n")
+        assert _expand_only_cases([f"@{ids}"]) == {"aaa", "bbb", "ccc"}
+
+    def test_bare_ids_and_a_file_compose(self, tmp_path):
+        ids = tmp_path / "ids.txt"
+        ids.write_text("bbb\n")
+        assert _expand_only_cases(["aaa", f"@{ids}"]) == {"aaa", "bbb"}
+
+    def test_a_repeated_id_is_not_two_cases(self, tmp_path):
+        ids = tmp_path / "ids.txt"
+        ids.write_text("aaa\n")
+        assert _expand_only_cases(["aaa", f"@{ids}"]) == {"aaa"}
+
+    def _one_case_loaded(self, monkeypatch):
+        """A loader that yields exactly one case, id `aaa`, with no code side.
+
+        No `code_path` on purpose: the oracle arm then skips it before any clone or
+        context build, so these tests exercise the selection and the provenance block
+        without git, a network, or a judge.
+        """
+        case = JudgeCase(
+            example_id="aaa", repo="acme/widget", shape="B", basis="b",
+            doc_path="docs/x.rst", code_path=None, at_sha="a", fix_sha="f",
+            subject="s", shared_identifiers=(), verdict="drift", sheet="s.md",
+            resolved_from="labels.jsonl",
+        )
+        monkeypatch.setattr(
+            "driftwood.judge.cli.load_cases", lambda *a, **k: ([case], {})
+        )
+        monkeypatch.setattr(
+            "driftwood.judge.cli.format_case_report", lambda *a, **k: ""
+        )
+
+    def test_an_unknown_id_is_refused_rather_than_skipped(self, monkeypatch, capsys):
+        # The failure this prevents: a mistyped id selects fewer cases than asked for and
+        # the run reports a confident number over a set nobody chose. Same shape as the
+        # `retried` bug -- a false claim about the run, printed by the tool built to find
+        # false claims about code.
+        self._one_case_loaded(monkeypatch)
+        args = _parser().parse_args(["judge-eval", "--only-cases", "aaa", "typo"])
+        assert _cmd_eval(args) == 1
+        assert "typo" in capsys.readouterr().err
+
+    def test_it_refuses_before_any_judge_is_built(self, monkeypatch):
+        # Ordering matters for cost: the refusal has to land before a client could be
+        # constructed, so a typo cannot reach the API even with --judges model.
+        self._one_case_loaded(monkeypatch)
+        monkeypatch.setattr(
+            "driftwood.judge.cli._build_judges",
+            lambda *a, **k: (_ for _ in ()).throw(AssertionError("built a judge")),
+        )
+        args = _parser().parse_args(["judge-eval", "--only-cases", "typo"])
+        assert _cmd_eval(args) == 1
+
+    def test_the_chosen_ids_are_recorded_not_just_their_count(self, monkeypatch, tmp_path):
+        # A score file is the measurement history. "1 case" in a provenance block cannot
+        # distinguish a deliberate probe from a run that lost 44 cases to a loader bug,
+        # which is the mistake the frozen join table exists for. So the ids go in, sorted.
+        self._one_case_loaded(monkeypatch)
+        out = tmp_path / "probe.json"
+        args = _parser().parse_args(
+            ["judge-eval", "--arms", "oracle", "--only-cases", "bbb", "aaa",
+             "--out", str(out)]
+        )
+        # `bbb` is not loaded, so this must refuse rather than write a file scoring one
+        # case under a name claiming two.
+        assert _cmd_eval(args) == 1
+        assert not out.exists()
+
+        args = _parser().parse_args(
+            ["judge-eval", "--arms", "oracle", "--only-cases", "aaa",
+             "--out", str(out)]
+        )
+        assert _cmd_eval(args) == 0
+        written = json.loads(out.read_text(encoding="utf-8"))
+        assert _provenance(written)["only_cases"] == ["aaa"]
+
+    def test_the_code_budget_is_recorded_so_a_score_says_which_harness_made_it(
+        self, monkeypatch, tmp_path
+    ):
+        # The probe changes the budget, and the budget is inside the cache key. Two score
+        # files over the same cases at different budgets are two different measurements,
+        # and nothing else in the payload would say which was which.
+        self._one_case_loaded(monkeypatch)
+        out = tmp_path / "wide.json"
+        args = _parser().parse_args(
+            ["judge-eval", "--arms", "oracle", "--code-budget", "36000",
+             "--out", str(out)]
+        )
+        assert _cmd_eval(args) == 0
+        assert _provenance(json.loads(out.read_text(encoding="utf-8")))["code_budget"] == 36_000
+
+    def test_the_code_budget_defaults_to_the_published_constant(self):
+        # Every score already in `data/scores/` was produced at this value. A default
+        # that drifted from it would make a re-run measure a different harness and say
+        # nothing about having done so.
+        args = _parser().parse_args(["judge-eval"])
+        assert args.code_budget == CODE_BUDGET
+
+    def test_the_code_budget_help_warns_that_it_re_pays_the_cache(self):
+        for action in _eval_parser()._actions:
+            if action.dest == "code_budget":
+                assert "CACHE KEY" in (action.help or "")
+                return
+        raise AssertionError("judge-eval has no --code-budget argument")
+
+    def test_a_run_without_the_flag_records_it_as_absent_not_as_every_id(
+        self, monkeypatch, tmp_path
+    ):
+        # `null` rather than the full id list, so a reader of the score file can tell a
+        # whole-corpus run from a probe that happened to select everything.
+        self._one_case_loaded(monkeypatch)
+        out = tmp_path / "full.json"
+        args = _parser().parse_args(
+            ["judge-eval", "--arms", "oracle", "--out", str(out)]
+        )
+        assert _cmd_eval(args) == 0
+        assert _provenance(json.loads(out.read_text(encoding="utf-8")))["only_cases"] is None
+
+
+class TestTheDocumentBudgetFlag:
+    """The lever the earlier diagnosis missed, so it gets the same treatment as `--k`
+    and `--code-budget`: a flag, recorded in provenance, defaulting to the constant every
+    published score was produced at.
+    """
+
+    def test_it_defaults_to_the_published_constant(self):
+        assert _parser().parse_args(["judge-eval"]).doc_budget == DOC_BUDGET
+
+    def test_it_is_separate_from_the_code_budget(self):
+        args = _parser().parse_args(
+            ["judge-eval", "--doc-budget", "40000", "--code-budget", "9000"]
+        )
+        assert (args.doc_budget, args.code_budget) == (40_000, 9_000)
+
+    def test_the_help_warns_that_it_re_pays_the_cache(self):
+        for action in _eval_parser()._actions:
+            if action.dest == "doc_budget":
+                assert "CACHE KEY" in (action.help or "")
+                return
+        raise AssertionError("judge-eval has no --doc-budget argument")
+
+
+class TestPastingAJudgeNameBackIn:
+    """The form the reports print must be runnable, because it is what gets pasted.
+
+    Written after a probe was typed with `--judges model:claude-sonnet-5`, copied from a
+    score file, and rejected by argparse -- which exits before the spend preflight, so the
+    terminal showed a usage message where a result was expected and the run looked done.
+    """
+
+    def test_the_bare_choice_still_works(self):
+        args = _eval_parser().parse_args(["--judges", "model"])
+        assert args.judges == ["model"]
+
+    def test_the_form_the_reports_print_is_accepted(self):
+        args = _eval_parser().parse_args(["--judges", "model:claude-sonnet-5"])
+        assert args.judges == ["model:claude-sonnet-5"]
+        assert _expand_groups(args.judges) == {"model"}
+        assert _model_from_judges(args.judges, "unused-fallback") == "claude-sonnet-5"
+
+    def test_an_inline_id_beats_the_model_flag(self):
+        # Rather than the other way round: the inline form is the more specific of the
+        # two, and it is the one the person typed most recently.
+        args = _eval_parser().parse_args(
+            ["--judges", "model:claude-opus-5", "--model", "claude-sonnet-5"]
+        )
+        assert _model_from_judges(args.judges, args.model) == "claude-opus-5"
+
+    def test_the_model_flag_is_the_fallback_when_nothing_is_inline(self):
+        args = _eval_parser().parse_args(["--judges", "model", "--model", "claude-opus-5"])
+        assert _model_from_judges(args.judges, args.model) == "claude-opus-5"
+
+    def test_it_composes_with_a_group(self):
+        args = _eval_parser().parse_args(["--judges", "floors", "model:claude-sonnet-5"])
+        assert _expand_groups(args.judges) == {*FREE_JUDGES, "model"}
+        assert _model_from_judges(args.judges, "x") == "claude-sonnet-5"
+
+    def test_two_inline_models_are_refused_rather_than_silently_picked(self):
+        # One score file describes one model. Picking either would write a provenance
+        # block that disagrees with half the cache keys the run created.
+        args = _eval_parser().parse_args(
+            ["--judges", "model:claude-sonnet-5", "model:claude-opus-5"]
+        )
+        with pytest.raises(SystemExit) as excinfo:
+            _model_from_judges(args.judges, "x")
+        assert "more than one model" in str(excinfo.value)
+
+    def test_a_bare_colon_is_refused(self):
+        with pytest.raises(SystemExit):
+            _eval_parser().parse_args(["--judges", "model:"])
+
+    def test_an_unknown_judge_is_still_refused(self):
+        with pytest.raises(SystemExit):
+            _eval_parser().parse_args(["--judges", "always-maybe"])
+
+    def test_the_refusal_names_the_inline_form_as_a_way_out(self):
+        # The point of the change is the message, not the parse. A rejection that lists
+        # only the bare choices is what sent someone looking for a flag that was there.
+        with pytest.raises(argparse.ArgumentTypeError) as excinfo:
+            _judge_arg("sonnet")
+        assert "model:<id>" in str(excinfo.value)
+
+
+class TestTheScoreFileRecordsEverythingInTheCacheKey:
+    """A score file has to say which harness produced it, and the reply budget is part of
+    that harness. Two runs of the same probe -- one with `--retry-max-tokens 12000`, one
+    without -- came out with 2 truncated replies against 0, a different confusion matrix,
+    and nothing in either provenance block to tell them apart.
+    """
+
+    def _written(self, tmp_path, monkeypatch, argv):
+        case = JudgeCase(
+            example_id="aaa", repo="acme/widget", shape="B", basis="b",
+            doc_path="docs/x.rst", code_path=None, at_sha="a", fix_sha="f",
+            subject="s", shared_identifiers=(), verdict="drift", sheet="s.md",
+            resolved_from="labels.jsonl",
+        )
+        monkeypatch.setattr(
+            "driftwood.judge.cli.load_cases", lambda *a, **k: ([case], {})
+        )
+        monkeypatch.setattr("driftwood.judge.cli.format_case_report", lambda *a, **k: "")
+        out = tmp_path / "probe.json"
+        args = _eval_parser().parse_args([*argv, "--arms", "oracle", "--out", str(out)])
+        assert _cmd_eval(args) == 0
+        return _provenance(json.loads(out.read_text()))
+
+    def test_the_retry_ceiling_is_recorded(self, tmp_path, monkeypatch):
+        provenance = self._written(
+            tmp_path, monkeypatch, ["--retry-max-tokens", "12000"]
+        )
+        assert provenance["retry_max_tokens"] == 12000
+
+    def test_its_absence_is_recorded_as_absent_not_as_the_base_ceiling(
+        self, tmp_path, monkeypatch
+    ):
+        # None, not `max_tokens`. A run that never retried and a run that retried at its
+        # own ceiling reach different cache keys, and reading the second off the first is
+        # how a truncated reply gets counted as an answer.
+        provenance = self._written(tmp_path, monkeypatch, [])
+        assert provenance["retry_max_tokens"] is None
+        assert provenance["max_tokens"] == DEFAULT_MAX_TOKENS
+
+    def test_the_effort_setting_is_recorded(self, tmp_path, monkeypatch):
+        provenance = self._written(tmp_path, monkeypatch, ["--effort", "high"])
+        assert provenance["effort"] == "high"
+
+    def test_every_flag_inside_the_cache_key_reaches_the_score_file(
+        self, tmp_path, monkeypatch
+    ):
+        # The list, stated once. `context_hash` takes the rendered context plus the
+        # request dict, so the key is: what shapes the context (k, both budgets, the
+        # chosen cases) and what shapes the call (both ceilings, effort). A flag added to
+        # either half without a provenance entry makes a score file unattributable.
+        provenance = self._written(tmp_path, monkeypatch, [])
+        for field in (
+            "k", "code_budget", "doc_budget", "only_cases",
+            "max_tokens", "retry_max_tokens", "effort",
+        ):
+            assert field in provenance, f"{field} is in the cache key but not the score file"
