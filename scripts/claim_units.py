@@ -42,55 +42,34 @@ on a page nobody has labelled. It will be wrong at the edges -- a claim spanning
 sentences counts twice, a directive block counts as none -- so read it as a cost estimate
 to within about 20% and not as a taxonomy. The decision it informs does not turn on the
 third significant figure.
+
+The definition lives in `driftwood.judge.claims` and is IMPORTED here. It was copied here
+first, and the copy went stale the moment the package version learned to skip the body of
+a fenced block: this script reported 1,240 units where the judge would have asked about
+1,195, disagreeing on 8 of the 45 cases about what the arm does. The numbers below are the
+ones the built judge produces. Two implementations of one rule with no test between them is the
+thing this repository exists to find, and it was in the file doing the finding.
 """
 
 from __future__ import annotations
 
 import argparse
 import dataclasses
-import re
 import statistics
 from pathlib import Path
 
 from driftwood.judge.cases import load_cases
+# THE SAME enumeration the judge uses, imported rather than reimplemented. This script had
+# its own copy for exactly as long as it took the package version to gain a fix the copy
+# did not have -- a fence body came through as prose here and not there -- so the pricing
+# table described a design nobody was going to build. Two implementations of one rule, one
+# of them quietly stale, is this repository's entire subject; it is not going to be the
+# shape of the script that prices the work.
+from driftwood.judge.claims import DEFAULT_BATCH as BATCH, claim_units
 from driftwood.judge.context import CODE_BUDGET, DOC_BUDGET, ContextBuilder, render
 from driftwood.judge.evaluate import estimate_spend
 from driftwood.judge.judge import DEFAULT_MAX_TOKENS, SYSTEM_PROMPT
 from driftwood.mining.gitio import ensure_clone, read_blobs
-from driftwood.mining.identifiers import extract, literal_spans
-
-# Claims are batched at this many per call in the fourth design. 8 is not tuned -- it is
-# the value that makes the arithmetic legible, and section 2 prints the whole curve so a
-# different one can be read off rather than argued for.
-BATCH = 8
-
-_SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
-
-# Lines that are not prose: rst directives, fenced code, indented blocks, table rules,
-# underlines. Counted as part of no unit, which undercounts pages that make claims
-# entirely inside a table. Named so the undercount is a known direction, not a surprise.
-_NOT_PROSE = re.compile(
-    r"^\s*(?:\.\.\s|```|~~~|\||[-=~^\"'+*#]{3,}\s*$|>>>|\$\s)|^\s{4,}\S"
-)
-
-
-def claim_units(text: str) -> list[str]:
-    """The page's prose sentences that mark up at least one identifier."""
-    units: list[str] = []
-    for block in re.split(r"\n\s*\n", text):
-        lines = [ln for ln in block.splitlines() if not _NOT_PROSE.match(ln)]
-        if not lines:
-            continue
-        prose = " ".join(ln.strip() for ln in lines).strip()
-        if not prose:
-            continue
-        for sentence in _SENTENCE_END.split(prose):
-            sentence = sentence.strip()
-            if not sentence:
-                continue
-            if extract(literal_spans(sentence), versions=False):
-                units.append(sentence)
-    return units
 
 
 def tokens(prompt: str) -> int:
@@ -218,7 +197,7 @@ def main() -> int:
     print(
         "\n  INPUT ONLY. Output is billed too, at a higher rate, and it scales with the"
         "\n  CALL count rather than the token count -- the last paid run averaged ~3,900"
-        "\n  output tokens a call, so 173 calls is roughly four times the reply volume of"
+        f"\n  output tokens a call, so {calls_batch:,} calls is roughly four times the reply volume of"
         "\n  45. That lands the multiplier for the total near the input multiplier rather"
         "\n  than below it, so read these as the whole design's shape and not as a bill."
     )
