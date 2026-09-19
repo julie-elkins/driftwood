@@ -23,17 +23,20 @@ from pathlib import Path
 import pytest
 
 from driftwood.judge.cases import JudgeCase
+from driftwood.judge.claims import DEFAULT_BATCH
 from driftwood.judge.cli import (
     FREE_JUDGES,
     JUDGE_CHOICES,
+    _build_judges,
     _cmd_eval,
     _expand_groups,
     _expand_only_cases,
+    _is_paid,
     _judge_arg,
     _model_from_judges,
     add_parser,
 )
-from driftwood.judge.context import CODE_BUDGET, DOC_BUDGET
+from driftwood.judge.context import CODE_BUDGET, DOC_BUDGET, CodeFile, JudgeContext
 from driftwood.judge.evaluate import (
     CHARS_PER_TOKEN,
     estimate_spend,
@@ -45,6 +48,7 @@ from driftwood.judge.judge import (
     SYSTEM_PROMPT,
     AnthropicJudge,
     Judgement,
+    PerClaimJudge,
 )
 
 # Commands a reader could paste, which is why the message backticks them. Reading
@@ -71,6 +75,54 @@ def _provenance(payload: dict) -> dict:
     handed to `to_json` would pass on a field that never survived serialisation.
     """
     return payload["provenance"]
+
+
+# The estimate, read back off the preflight notice. Through the printed line rather
+# than by calling `estimate_spend` again, because the thing under test is what the RUN
+# prices -- an assertion against a second call to the same function would pass while the
+# run priced something else entirely.
+_ESTIMATED_TOKENS = re.compile(r"~([\d,]+) input tokens")
+
+
+def _estimated_tokens(text: str) -> int:
+    found = _ESTIMATED_TOKENS.search(text)
+    assert found, f"no estimate on screen in:\n{text}"
+    return int(found.group(1).replace(",", ""))
+
+
+def _claim_reply(*rows: dict) -> str:
+    """One batch reply: the JSON array `CLAIM_SYSTEM_PROMPT` asks for."""
+    return json.dumps(list(rows))
+
+
+class _ScriptedClient:
+    """Answers each call with the next queued reply, and raises when it runs dry.
+
+    Deliberately not shared with `tests/test_per_claim.py`, which has its own: this one
+    exists to pre-warm a cache so the CLI can be run with no key, and a stub two files
+    depend on grows options for both of them until it is a mock framework.
+    """
+
+    def __init__(self, replies) -> None:
+        self.replies = list(replies)
+        self.calls: list[dict] = []
+        self.messages = self
+
+    def create(self, **kwargs):
+        index = len(self.calls)
+        self.calls.append(kwargs)
+        assert index < len(self.replies), f"unscripted call {index + 1}"
+        reply = self.replies[index]
+
+        class _Block:
+            type = "text"
+            text = reply
+
+        class _Response:
+            content = [_Block()]
+            stop_reason = "end_turn"
+
+        return _Response()
 
 
 def _judge_accepts(value: str) -> bool:
@@ -648,3 +700,340 @@ class TestTheScoreFileRecordsEverythingInTheCacheKey:
             "max_tokens", "retry_max_tokens", "effort",
         ):
             assert field in provenance, f"{field} is in the cache key but not the score file"
+
+
+class TestTheSecondPaidJudgeIsRecognisedAsPaid:
+    """`per-claim` costs money, and the preflight is the only thing between a mis-set flag
+    and a bill. A spend check that silently does not recognise a paid judge is the one bug
+    in this file that cannot be caught by reading the output afterwards -- by then it has
+    been paid for.
+    """
+
+    def test_it_is_a_judge_choice_and_takes_the_inline_form_the_reports_print(self):
+        assert "per-claim" in JUDGE_CHOICES
+        assert _judge_accepts("per-claim")
+        assert _judge_accepts("per-claim:claude-sonnet-5")
+
+    def test_the_inline_form_expands_to_the_judge_and_names_the_model(self):
+        args = _eval_parser().parse_args(["--judges", "per-claim:claude-sonnet-5"])
+        assert _expand_groups(args.judges) == {"per-claim"}
+        assert _model_from_judges(args.judges, "unused") == "claude-sonnet-5"
+
+    def test_a_bare_colon_is_refused_here_too(self):
+        with pytest.raises(SystemExit):
+            _eval_parser().parse_args(["--judges", "per-claim:"])
+
+    def test_naming_two_models_across_the_two_paid_judges_is_refused(self):
+        # The same rule as two inline `model:` ids, and the case that would slip through a
+        # check written only against one prefix: one score file describes one model.
+        args = _eval_parser().parse_args(
+            ["--judges", "model:claude-sonnet-5", "per-claim:claude-opus-5"]
+        )
+        with pytest.raises(SystemExit) as excinfo:
+            _model_from_judges(args.judges, "x")
+        assert "more than one model" in str(excinfo.value)
+
+    def test_both_paid_judges_together_expand_to_both(self):
+        args = _eval_parser().parse_args(["--judges", "floors", "model", "per-claim"])
+        assert _expand_groups(args.judges) == {*FREE_JUDGES, "model", "per-claim"}
+
+    @pytest.mark.parametrize(
+        "name,paid",
+        [
+            ("model:claude-sonnet-5", True),
+            ("model:claude-sonnet-5(high)", True),
+            ("per-claim/8:claude-sonnet-5", True),
+            ("per-claim/8:claude-sonnet-5(high)", True),
+            ("always-not-false", False),
+            ("always-false", False),
+            ("lexical-absence(>=3)", False),
+        ],
+    )
+    def test_the_paid_test_matches_the_names_the_judges_actually_carry(self, name, paid):
+        # Against the built names rather than the flag words, because that is what
+        # `_cmd_eval` iterates. `per-claim/8:...` does not start with `per-claim:`, which
+        # is why the prefix tuple holds the bare word.
+        assert _is_paid(name) is paid
+
+    def test_the_built_judge_carries_the_batch_size_from_the_flag(self):
+        args = _eval_parser().parse_args(
+            ["--judges", "per-claim:m", "--claim-batch", "4"]
+        )
+        judges = _build_judges(args)
+        assert "per-claim/4:m" in judges
+        assert judges["per-claim/4:m"].batch_size == 4
+
+    def test_the_batch_size_defaults_to_the_size_the_pricing_was_read_at(self):
+        # Every number in the plan file's pricing table is at 8. A default that drifted
+        # would make the arm that gets built a different arm from the one that was priced.
+        assert _eval_parser().parse_args([]).claim_batch == DEFAULT_BATCH
+
+    def test_the_batch_size_help_warns_that_it_re_asks_everything(self):
+        for action in _eval_parser()._actions:
+            if action.dest == "claim_batch":
+                assert "cache key" in (action.help or "")
+                return
+        raise AssertionError("judge-eval has no --claim-batch argument")
+
+
+class TestThePerClaimArmEndToEndOffACachedRun:
+    """One case, judged per claim, with no key at all -- the arm's replies pre-cached.
+
+    Everything after the call is what this exercises, and it is the half that cannot be
+    checked by reading `judge.py`: whether the estimate is priced per judge, whether the
+    located row reaches the table and the score file, and whether the provenance block
+    records the batch size that was in the cache key.
+    """
+
+    _DOC = (
+        "The `connect` helper opens a socket.\n"
+        "\n"
+        "The `timeout` setting defaults to 30 seconds.\n"
+    )
+
+    def _case(self):
+        return JudgeCase(
+            example_id="aaa", repo="acme/widget", shape="A", basis="b",
+            doc_path="docs/x.rst", code_path="src/c.py", at_sha="a", fix_sha="f",
+            subject="s", shared_identifiers=("timeout",), verdict="drift",
+            sheet="s.md", resolved_from="labels.jsonl",
+        )
+
+    def _context(self):
+        return JudgeContext(
+            example_id="aaa", repo="acme/widget", arm="oracle", doc_path="docs/x.rst",
+            doc_text=self._DOC, doc_truncated=False, at_sha="a",
+            code_files=(CodeFile("src/c.py", "def connect(): ...", False, None),),
+            pool_size=1, doc_full=self._DOC,
+        )
+
+    def _run(self, tmp_path, monkeypatch, *, replies, argv=()):
+        """Pre-warm the cache with `replies`, then run the CLI with no key.
+
+        The pre-warm uses the same cache directory, model, ceiling and batch size as the
+        run, so every call is a hit. Deleting the key is what makes that a claim rather
+        than an assumption: a miss here raises instead of quietly costing money.
+        """
+        case = self._case()
+        context = self._context()
+        cache = tmp_path / "cache"
+        monkeypatch.setattr(
+            "driftwood.judge.cli.load_cases", lambda *a, **k: ([case], {})
+        )
+        monkeypatch.setattr("driftwood.judge.cli.format_case_report", lambda *a, **k: "")
+
+        class _Builder:
+            def __init__(self, *a, **k) -> None:
+                pass
+
+            def build(self, case, arm):
+                return context
+
+        monkeypatch.setattr("driftwood.judge.cli.ContextBuilder", _Builder)
+
+        warm = PerClaimJudge(
+            client=_ScriptedClient(replies), cache_dir=cache, model="m",
+            batch_size=1,
+        )
+        warm.judge(context)
+
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        out = tmp_path / "probe.json"
+        args = _eval_parser().parse_args(
+            [
+                "--judges", "per-claim:m", "--claim-batch", "1",
+                "--arms", "oracle", "--cache", str(cache),
+                "--null-trials", "5", "--out", str(out), *argv,
+            ]
+        )
+        assert _cmd_eval(args) == 0
+        return json.loads(out.read_text(encoding="utf-8"))
+
+    def _both_rows(self, payload):
+        return payload["arms"]["oracle"]["judges"]
+
+    def test_the_located_row_sits_beside_the_aggregate_one(self, tmp_path, monkeypatch):
+        # One axis, not a separate report. The whole difficulty with construct validity is
+        # that it is invisible next to a number that looks fine, so the two rows go in the
+        # same table against the same floors.
+        payload = self._run(
+            tmp_path, monkeypatch,
+            replies=[
+                _claim_reply({"n": 1, "verdict": "false", "reason": "no connect"}),
+                _claim_reply({"n": 1, "verdict": "not-false", "reason": "fine"}),
+            ],
+        )
+        rows = self._both_rows(payload)
+        assert "per-claim/1:m" in rows
+        assert "per-claim/1:m [located]" in rows
+
+    def test_a_flag_the_label_cannot_speak_to_is_held_out_not_scored_wrong(
+        self, tmp_path, monkeypatch
+    ):
+        # `shared_identifiers` is `("timeout",)`, so a flag on the `connect` sentence is a
+        # verdict the label says nothing about. Aggregate: a true positive on a `drift`
+        # case. Located: an abstention, and the case stays in `n`.
+        payload = self._run(
+            tmp_path, monkeypatch,
+            replies=[
+                _claim_reply({"n": 1, "verdict": "false", "reason": "no connect"}),
+                _claim_reply({"n": 1, "verdict": "not-false", "reason": "fine"}),
+            ],
+        )
+        rows = self._both_rows(payload)
+        assert rows["per-claim/1:m"]["abstained"] == 0
+        assert rows["per-claim/1:m [located]"]["abstained"] == 1
+        assert rows["per-claim/1:m [located]"]["n"] == rows["per-claim/1:m"]["n"]
+
+    def test_a_flag_on_the_labelled_sentence_survives_both_scorings(
+        self, tmp_path, monkeypatch
+    ):
+        payload = self._run(
+            tmp_path, monkeypatch,
+            replies=[
+                _claim_reply({"n": 1, "verdict": "not-false", "reason": "fine"}),
+                _claim_reply({"n": 1, "verdict": "false", "reason": "timeout is 5"}),
+            ],
+        )
+        rows = self._both_rows(payload)
+        assert rows["per-claim/1:m"]["f1"] == rows["per-claim/1:m [located]"]["f1"]
+        assert rows["per-claim/1:m [located]"]["abstained"] == 0
+
+    def test_the_located_row_is_free(self, tmp_path, monkeypatch):
+        # No call is made for it. If it cost anything the two scorings would be a choice
+        # rather than both, and the construct-validity number is the one that would lose.
+        payload = self._run(
+            tmp_path, monkeypatch,
+            replies=[
+                _claim_reply({"n": 1, "verdict": "false", "reason": "no connect"}),
+                _claim_reply({"n": 1, "verdict": "not-false", "reason": "fine"}),
+            ],
+        )
+        # The assertion is that the run finished at all: `_run` deletes the key, so a
+        # single cache miss would have raised rather than returned a score file. Both rows
+        # are therefore in that file having cost nothing beyond the two replies the
+        # aggregate row already needed.
+        rows = self._both_rows(payload)
+        assert set(rows) == {"per-claim/1:m", "per-claim/1:m [located]"}
+
+    def test_the_batch_size_is_recorded_in_the_provenance(self, tmp_path, monkeypatch):
+        payload = self._run(
+            tmp_path, monkeypatch,
+            replies=[
+                _claim_reply({"n": 1, "verdict": "not-false"}),
+                _claim_reply({"n": 1, "verdict": "not-false"}),
+            ],
+        )
+        assert _provenance(payload)["claim_batch"] == 1
+
+    def test_a_run_with_no_per_claim_judge_records_it_as_absent(
+        self, tmp_path, monkeypatch
+    ):
+        # Null rather than the default. A recorded 8 on a run that had no per-claim arm
+        # reads as a setting that was in force, which is the `retry_max_tokens: 0` mistake
+        # in a different field.
+        case = JudgeCase(
+            example_id="aaa", repo="acme/widget", shape="B", basis="b",
+            doc_path="docs/x.rst", code_path=None, at_sha="a", fix_sha="f",
+            subject="s", shared_identifiers=(), verdict="drift", sheet="s.md",
+            resolved_from="labels.jsonl",
+        )
+        monkeypatch.setattr(
+            "driftwood.judge.cli.load_cases", lambda *a, **k: ([case], {})
+        )
+        monkeypatch.setattr("driftwood.judge.cli.format_case_report", lambda *a, **k: "")
+        out = tmp_path / "free.json"
+        args = _eval_parser().parse_args(["--arms", "oracle", "--out", str(out)])
+        assert _cmd_eval(args) == 0
+        assert _provenance(json.loads(out.read_text()))["claim_batch"] is None
+
+
+class TestThePerClaimEstimateIsPricedAsItsOwnJudge:
+    """A single estimate for the arm would under-read the per-claim judge by its batch
+    count -- 168 calls against the per-page judge's 45 on the seeded arm, 3.5x -- and it
+    would do it in the cheap-looking direction. That is the one direction an estimate must
+    not be wrong in, and this project has made that mistake twice already: once by
+    omitting the system prompt from the count, once by guessing chars-per-token high.
+    """
+
+    _DOC = (
+        "The `connect` helper opens a socket.\n"
+        "\n"
+        "The `timeout` setting defaults to 30 seconds.\n"
+        "\n"
+        "The `retries` count is 3.\n"
+    )
+
+    def _setup(self, monkeypatch):
+        case = JudgeCase(
+            example_id="aaa", repo="acme/widget", shape="A", basis="b",
+            doc_path="docs/x.rst", code_path="src/c.py", at_sha="a", fix_sha="f",
+            subject="s", shared_identifiers=("timeout",), verdict="drift",
+            sheet="s.md", resolved_from="labels.jsonl",
+        )
+        context = JudgeContext(
+            example_id="aaa", repo="acme/widget", arm="oracle", doc_path="docs/x.rst",
+            doc_text=self._DOC, doc_truncated=False, at_sha="a",
+            code_files=(CodeFile("src/c.py", "def connect(): ...", False, None),),
+            pool_size=1, doc_full=self._DOC,
+        )
+        monkeypatch.setattr(
+            "driftwood.judge.cli.load_cases", lambda *a, **k: ([case], {})
+        )
+        monkeypatch.setattr("driftwood.judge.cli.format_case_report", lambda *a, **k: "")
+
+        class _Builder:
+            def __init__(self, *a, **k) -> None:
+                pass
+
+            def build(self, case, arm):
+                return context
+
+        monkeypatch.setattr("driftwood.judge.cli.ContextBuilder", _Builder)
+
+    def _refused(self, monkeypatch, capsys, argv):
+        """Run with a token cap low enough to refuse, and read the estimate off the notice.
+
+        The refusal path is what makes this checkable without spending: the preflight
+        prints its per-judge figures and then returns 1 before anything is sent.
+        """
+        self._setup(monkeypatch)
+        args = _eval_parser().parse_args(
+            ["--arms", "oracle", "--max-input-tokens", "1", *argv]
+        )
+        assert _cmd_eval(args) == 1
+        return capsys.readouterr()
+
+    def test_each_paid_judge_gets_its_own_line(self, monkeypatch, capsys):
+        captured = self._refused(
+            monkeypatch, capsys, ["--judges", "model:m", "per-claim:m"]
+        )
+        assert "model:m:" in captured.out
+        assert "per-claim/8:m:" in captured.out
+
+    def test_the_cap_is_checked_against_the_total_not_per_judge(self, monkeypatch, capsys):
+        # Two judges each just under the cap are a bill over it, and the cap exists to
+        # bound the bill.
+        captured = self._refused(
+            monkeypatch, capsys, ["--judges", "model:m", "per-claim:m"]
+        )
+        assert "across all paid judges" in captured.out
+        assert "REFUSING" in captured.err
+
+    def test_nothing_is_sent_when_it_refuses(self, monkeypatch, capsys):
+        # Both paid judges are constructed, and neither may reach a client. With the key
+        # deleted, a call would raise rather than return 1.
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        self._refused(monkeypatch, capsys, ["--judges", "model:m", "per-claim:m"])
+
+    def test_a_smaller_batch_is_priced_higher_than_a_larger_one(self, monkeypatch, capsys):
+        # The direction that matters: one claim per call repeats the code side once per
+        # claim, so the estimate has to rise as the batch shrinks. A single per-arm
+        # estimate would report these two as the same number.
+        one = self._refused(
+            monkeypatch, capsys, ["--judges", "per-claim:m", "--claim-batch", "1"]
+        ).out
+        eight = self._refused(
+            monkeypatch, capsys, ["--judges", "per-claim:m", "--claim-batch", "8"]
+        ).out
+        assert _estimated_tokens(one) > _estimated_tokens(eight)

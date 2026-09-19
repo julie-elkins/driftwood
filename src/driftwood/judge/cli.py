@@ -25,7 +25,15 @@ from .cases import (
     freeze_records,
     load_cases,
 )
-from .context import ARMS, CODE_BUDGET, DEFAULT_K, DOC_BUDGET, ContextBuilder, render
+from .context import (
+    ARMS,
+    CODE_BUDGET,
+    DEFAULT_K,
+    DOC_BUDGET,
+    ContextBuilder,
+    render,
+    render_claim_batch,
+)
 from .evaluate import (
     dump_json,
     estimate_spend,
@@ -33,14 +41,18 @@ from .evaluate import (
     format_spend,
     measured_spend,
     noise_range,
+    restrict_to_located,
     to_json,
 )
+from .claims import DEFAULT_BATCH, batch as claim_batch, claim_units
 from .judge import (
+    CLAIM_SYSTEM_PROMPT,
     DEFAULT_MAX_TOKENS,
     SYSTEM_PROMPT,
     AlwaysJudge,
     AnthropicJudge,
     LexicalJudge,
+    PerClaimJudge,
 )
 
 __all__ = ["add_parser"]
@@ -56,7 +68,17 @@ FREE_JUDGES = ("always-not-false", "always-false", "lexical-absence")
 # which wraps in a terminal and silently truncates when pasted -- the failure that
 # produced `--out` with no argument followed by a stray path being run as a command.
 JUDGE_GROUPS = {"floors": FREE_JUDGES}
-JUDGE_CHOICES = ("floors", "model", *FREE_JUDGES)
+JUDGE_CHOICES = ("floors", "model", "per-claim", *FREE_JUDGES)
+
+# The judges that cost money, by name prefix. A list rather than `startswith("model:")`
+# spelled inline, because that test was in three places and the per-claim judge is the
+# second paid arm: a spend preflight that silently does not recognise a paid judge is the
+# one bug in this file that cannot be caught by reading the output afterwards.
+PAID_PREFIXES = ("model:", "per-claim")
+
+
+def _is_paid(name: str) -> bool:
+    return name.startswith(PAID_PREFIXES)
 
 
 def _judge_arg(value: str) -> str:
@@ -74,13 +96,15 @@ def _judge_arg(value: str) -> str:
     """
     if value in JUDGE_CHOICES:
         return value
-    if value.startswith("model:"):
-        model = value.split(":", 1)[1]
-        if not model:
-            raise argparse.ArgumentTypeError(
-                "`model:` needs an id after the colon, e.g. `model:claude-sonnet-5`"
-            )
-        return value
+    for prefix in ("model:", "per-claim:"):
+        if value.startswith(prefix):
+            model = value.split(":", 1)[1]
+            if not model:
+                raise argparse.ArgumentTypeError(
+                    f"`{prefix}` needs an id after the colon, e.g. "
+                    f"`{prefix}claude-sonnet-5`"
+                )
+            return value
     raise argparse.ArgumentTypeError(
         f"invalid judge {value!r}. Choose from {', '.join(JUDGE_CHOICES)}, or name the "
         f"model inline as `model:<id>` the way the reports print it"
@@ -91,7 +115,14 @@ def _expand_groups(names) -> set[str]:
     """`--judges floors model` -> the four judge names it stands for."""
     out: set[str] = set()
     for name in names:
-        out.update(JUDGE_GROUPS.get(name, ("model" if name.startswith("model:") else name,)))
+        if name in JUDGE_GROUPS:
+            out.update(JUDGE_GROUPS[name])
+        elif name.startswith("per-claim"):
+            out.add("per-claim")
+        elif name.startswith("model:"):
+            out.add("model")
+        else:
+            out.add(name)
     return out
 
 
@@ -102,7 +133,11 @@ def _model_from_judges(names, fallback: str) -> str:
     one model and whose cache keys say another is unreadable later, and that is the whole
     reason the model is in the judge's name.
     """
-    inline = {n.split(":", 1)[1] for n in names if n.startswith("model:")}
+    inline = {
+        n.split(":", 1)[1]
+        for n in names
+        if n.startswith(("model:", "per-claim:"))
+    }
     if len(inline) > 1:
         raise SystemExit(
             f"--judges names more than one model inline: {sorted(inline)}. "
@@ -174,6 +209,14 @@ def _build_judges(args: argparse.Namespace) -> dict[str, object]:
         )
         # Keyed by the judge's own name, which carries the effort setting when one was
         # chosen. Two efforts in one results file must not collide under `model:<model>`.
+        judges[judge.name] = judge
+    if "per-claim" in wanted:
+        judge = PerClaimJudge(
+            model=_model_from_judges(args.judges, args.model),
+            cache_dir=args.cache, max_tokens=args.max_tokens,
+            retry_max_tokens=args.retry_max_tokens, effort=args.effort,
+            batch_size=args.claim_batch,
+        )
         judges[judge.name] = judge
     return judges
 
@@ -326,30 +369,56 @@ def _cmd_eval(args: argparse.Namespace) -> int:
         # Priced before anything is sent, and only when something is about to be paid
         # for. Measured off the prompts that were actually built, so a mis-set --k or a
         # forgotten --limit shows up as a number here rather than on a bill.
-        paid = [name for name in judges if name.startswith("model:")]
-        estimate = None
+        paid = [name for name in judges if _is_paid(name)]
+        # Per judge, not one figure for the arm. The per-claim judge sends a different
+        # prompt a different number of times -- 168 calls to the per-page judge's 45 on the
+        # seeded arm -- so a single estimate would under-read it by 3.5x, in the
+        # cheap-looking direction, which is the one direction an estimate must not be wrong
+        # in. That mistake has already been made twice in this project: once by omitting
+        # the system prompt from the count, once by guessing chars-per-token high.
+        estimates: dict[str, dict] = {}
+        for name in paid:
+            judge = judges[name]
+            if isinstance(judge, PerClaimJudge):
+                prompts = [
+                    render_claim_batch(context, group)
+                    for context in contexts.values()
+                    for group in claim_batch(
+                        claim_units(context.doc_full or context.doc_text),
+                        judge.batch_size,
+                    )
+                ]
+                estimates[name] = estimate_spend(
+                    prompts, system=CLAIM_SYSTEM_PROMPT, max_tokens=args.max_tokens
+                )
+            else:
+                estimates[name] = estimate_spend(
+                    [render(c) for c in contexts.values()],
+                    system=SYSTEM_PROMPT,
+                    max_tokens=args.max_tokens,
+                )
         if paid:
-            estimate = estimate_spend(
-                [render(c) for c in contexts.values()],
-                system=SYSTEM_PROMPT,
-                max_tokens=args.max_tokens,
-            )
             # `flush=True`, because the point of a preflight is to be on screen BEFORE
             # the spend. Python block-buffers stdout when it is not a terminal, so
             # `judge-eval ... > run.log` or a pipe into `tee` showed an empty file for
             # the whole run and the estimate appeared only after every call had been
             # paid for. A safety notice that arrives after the event is decoration.
             print(f"arm {arm}: {', '.join(paid)} will be charged for", flush=True)
-            print(format_spend(estimate), flush=True)
-            if args.max_input_tokens and (
-                estimate["input_tokens_approx"] > args.max_input_tokens
-            ):
+            for name in paid:
+                print(f"  {name}:", flush=True)
+                print(format_spend(estimates[name]), flush=True)
+            total = sum(e["input_tokens_approx"] for e in estimates.values())
+            if len(paid) > 1:
+                print(f"  {total:,} estimated input tokens across all paid judges",
+                      flush=True)
+            if args.max_input_tokens and total > args.max_input_tokens:
                 # Denominated in tokens rather than dollars for the same reason the
-                # report is: a token budget cannot go stale.
+                # report is: a token budget cannot go stale. Checked against the TOTAL
+                # across paid judges rather than per judge: two judges each just under
+                # the cap are a bill over it, and the cap exists to bound the bill.
                 print(
-                    f"  REFUSING: estimated {estimate['input_tokens_approx']:,} input "
-                    f"tokens exceeds --max-input-tokens {args.max_input_tokens:,}. "
-                    "Nothing was sent.",
+                    f"  REFUSING: estimated {total:,} input tokens exceeds "
+                    f"--max-input-tokens {args.max_input_tokens:,}. Nothing was sent.",
                     file=sys.stderr,
                 )
                 return 1
@@ -362,38 +431,49 @@ def _cmd_eval(args: argparse.Namespace) -> int:
                 for example_id, context in contexts.items()
             }
 
-        if estimate is not None:
-            for name in paid:
-                print(f"arm {arm}: {name}")
-                print(format_spend(estimate, measured_spend(judgements[name])))
-                # A run that mixes token ceilings has to say so, or the argument for
-                # reusing the cheaper replies is unverifiable from the output. Three
-                # numbers, because they answer different questions and the first draft of
-                # this line conflated the first two: what ceiling each reply was produced
-                # under, how many of them were re-asked after dying at a lower one, and
-                # how many are STILL truncated. The last is what decides whether the
-                # mixture is legitimate at all -- it is sound only while every reply that
-                # hit a ceiling was re-asked above it.
-                #
-                # Read off the judgements rather than off the flags. `--retry-max-tokens
-                # 12000` on a cold cache serves every reply at 12,000 and re-asks none of
-                # them, so a line built from the flags would report a re-ask that never
-                # happened.
-                served = Counter(j.max_tokens_used for j in judgements[name].values())
-                retried = [j for j in judgements[name].values() if j.retried]
-                still = [j for j in judgements[name].values() if j.truncated]
-                if len(served) > 1 or retried or still:
-                    where = ", ".join(
-                        f"{count} at {ceiling}"
-                        for ceiling, count in sorted(served.items(),
-                                                     key=lambda kv: kv[0] or 0)
-                    )
-                    print(
-                        f"  ceilings: {where} token(s); {len(retried)} re-asked after "
-                        f"truncating at a lower ceiling; {len(still)} still truncated"
-                        + (" -- raise --retry-max-tokens further, the result is not "
-                           "readable yet" if still else " -- the mixture is sound")
-                    )
+        # The same replies, scored a second way, as a row of its own in the same table
+        # against the same floors and the same chance range. Not a separate report,
+        # deliberately: the whole difficulty with construct validity is that it is invisible
+        # next to a number that looks fine, and putting the two rows on one axis is what
+        # makes the gap between them readable. Costs nothing -- no call is made.
+        for name in list(judgements):
+            if not isinstance(judges.get(name), PerClaimJudge):
+                continue
+            judgements[f"{name} [located]"] = restrict_to_located(
+                arm_cases, judgements[name]
+            )
+
+        for name in paid:
+            print(f"arm {arm}: {name}")
+            print(format_spend(estimates[name], measured_spend(judgements[name])))
+            # A run that mixes token ceilings has to say so, or the argument for
+            # reusing the cheaper replies is unverifiable from the output. Three
+            # numbers, because they answer different questions and the first draft of
+            # this line conflated the first two: what ceiling each reply was produced
+            # under, how many of them were re-asked after dying at a lower one, and
+            # how many are STILL truncated. The last is what decides whether the
+            # mixture is legitimate at all -- it is sound only while every reply that
+            # hit a ceiling was re-asked above it.
+            #
+            # Read off the judgements rather than off the flags. `--retry-max-tokens
+            # 12000` on a cold cache serves every reply at 12,000 and re-asks none of
+            # them, so a line built from the flags would report a re-ask that never
+            # happened.
+            served = Counter(j.max_tokens_used for j in judgements[name].values())
+            retried = [j for j in judgements[name].values() if j.retried]
+            still = [j for j in judgements[name].values() if j.truncated]
+            if len(served) > 1 or retried or still:
+                where = ", ".join(
+                    f"{count} at {ceiling}"
+                    for ceiling, count in sorted(served.items(),
+                                                 key=lambda kv: kv[0] or 0)
+                )
+                print(
+                    f"  ceilings: {where} token(s); {len(retried)} re-asked after "
+                    f"truncating at a lower ceiling; {len(still)} still truncated"
+                    + (" -- raise --retry-max-tokens further, the result is not "
+                       "readable yet" if still else " -- the mixture is sound")
+                )
             print()
 
         scored = [c for c in arm_cases if c.example_id in contexts]
@@ -423,6 +503,15 @@ def _cmd_eval(args: argparse.Namespace) -> int:
                 # nothing. Null is the one value that cannot be misread as a setting.
                 "retry_max_tokens": args.retry_max_tokens or None,
                 "effort": args.effort,
+                # In the cache key by way of the rendered claim batch, so it changes the
+                # result and therefore belongs here -- the rule this project settled after
+                # two score files differed only in `--retry-max-tokens` and neither said so.
+                # Null when no per-claim judge ran, rather than the default, because a
+                # recorded 8 on a run that had no per-claim arm reads as a setting that was
+                # in force.
+                "claim_batch": args.claim_batch if any(
+                    n.startswith("per-claim") for n in judges
+                ) else None,
                 "judges": sorted(judges),
                 "repos": args.repos or "all",
                 "limit": args.limit,
@@ -517,6 +606,12 @@ def add_parser(subparsers) -> None:
              "KEY. Measured on the 9 recall-costing cases: on 3 of them the sentence the "
              "fixing commit deleted sits beyond 12,000 characters, so the claim under "
              "test was not in the prompt and no code budget could have answered it",
+    )
+    ev.add_argument(
+        "--claim-batch", type=int, default=DEFAULT_BATCH,
+        help="claims per call for `--judges per-claim`. It changes the rendered prompt, "
+             "so it changes the cache key: a different value re-asks everything. 8 is "
+             "what the pricing diagnostic was read at (168 calls, 3.5x one per-page pass)",
     )
     ev.add_argument(
         "--max-tokens", type=int, default=DEFAULT_MAX_TOKENS,

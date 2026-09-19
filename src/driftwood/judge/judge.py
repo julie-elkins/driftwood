@@ -42,7 +42,8 @@ from typing import Protocol
 
 from ..mining.identifiers import extract, literal_spans
 from . import DEFAULT_JUDGE_MODEL
-from .context import JudgeContext, context_hash, render
+from .claims import DEFAULT_BATCH, batch, claim_units
+from .context import JudgeContext, context_hash, render, render_claim_batch
 
 __all__ = [
     "DEFAULT_MAX_TOKENS",
@@ -119,12 +120,87 @@ Reply with JSON only, in this exact shape:
  "reason": "one or two sentences"}
 """
 
+# The per-claim prompt. The falsity definition, the exclusion list and the invitation to
+# abstain are WORD FOR WORD the ones above, and the duplication is deliberate on two
+# counts. First, `SYSTEM_PROMPT` is hashed into the cache key, so factoring the shared text
+# out into a constant that both prompts interpolate would change its bytes and re-pay every
+# reply already bought -- roughly $6 of measurement history, to save twenty lines. Second
+# and more important, this arm is supposed to move exactly ONE lever: the unit the question
+# is asked about. If the definition of "false" drifted between the two prompts as well, a
+# difference in the result could not be attributed to the unit, and the comparison against
+# F1 0.364 would measure two changes at once. The two blocks must be kept identical by hand,
+# and a test compares them rather than trusting that.
+#
+# What is genuinely different, and all of it follows from the unit:
+#  - The claims are given, numbered, and the reply must carry the number back, so a short
+#    reply cannot be silently misaligned against the wrong sentence.
+#  - The page is NOT supplied. So the prompt says so, in the exclusion list, because a judge
+#    that does not know the surrounding prose is missing is a judge that will guess at it.
+#  - "unclear" now also covers "this sentence needs context I was not given", which is a
+#    real and expected answer here and was not possible in the per-page arm.
+CLAIM_SYSTEM_PROMPT = """\
+You are reviewing a repository's documentation against its source code at one \
+specific commit. You will be shown one or more code files as they exist at that \
+commit, and then a numbered list of statements taken from one documentation file \
+at the same commit.
+
+For each numbered statement, answer one question: is it FALSE about the code as \
+shown?
+
+A statement is false if a reader who trusted it would be wrong about the code: a \
+function, parameter, attribute or setting that does not exist or is named \
+differently; a described default, type, return value or behaviour that contradicts \
+the code; an example that could not run as written.
+
+These are NOT false:
+- Prose about design, intent, rationale or history.
+- Something described at a higher level than the code, or simplified.
+- A statement about code that is not among the files shown. If the relevant code is \
+not here, you cannot tell.
+- Wording, formatting, typography or links.
+- A statement you merely cannot verify.
+
+You are shown the statements only, not the page they came from, so the sentences \
+around them are not available to you. A statement that reads as false but would be \
+qualified by its surroundings is "unclear", not "false".
+
+If the code needed to decide is not in front of you, answer "unclear". That is a \
+real answer and is preferred over a guess.
+
+Reply with a JSON array only, one object per numbered statement, in this exact \
+shape and in the same order:
+
+[{"n": 1,
+  "verdict": "false" | "not-false" | "unclear",
+  "code": "the code file and symbol that contradicts it, or null",
+  "reason": "one sentence"}]
+"""
+
 _JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
+_JSON_ARRAY_RE = re.compile(r"\[.*\]", re.DOTALL)
 _VERDICT_TO_BOOL: dict[str, bool | None] = {
     "false": True,
     "not-false": False,
     "unclear": None,
 }
+
+
+@dataclass(frozen=True)
+class ClaimVerdict:
+    """One answer about one sentence, carrying the sentence so it can be located.
+
+    `claim` is the unit as it was SENT, not as the model quoted it back. The per-page arm
+    had to trust the quote, and 5 of its 7 false negatives quoted no claim at all; here the
+    text is known before the call, so a verdict always has a locatable subject even when
+    the reply is terse. That is the property the location-strict scoring needs, and it is
+    the main thing this arm buys beyond a better number.
+    """
+
+    index: int  # 1-based, over the page's units, not within the batch
+    claim: str
+    answer: bool | None
+    code: str | None = None
+    reason: str = ""
 
 
 @dataclass(frozen=True)
@@ -163,10 +239,25 @@ class Judgement:
     # reuse argument would be untestable from the output, which is the same as untrue.
     max_tokens_used: int | None = None
     retried: bool = False
+    # Per-claim detail, empty for every judge that asks one question about a whole page.
+    # The aggregate `answer` above is derived from these and is what gets scored, so this
+    # is not a debug field: it is the evidence for the aggregate, and the only thing that
+    # can say WHICH sentence a `false` was about.
+    claim_verdicts: tuple[ClaimVerdict, ...] = ()
+    # Calls actually made or read for this one case. 1 everywhere except the per-claim
+    # arm, where a page of 85 units at 8 to a call is 11. Recorded because the run's cost
+    # scales with this rather than with the number of cases, and a cost that is not
+    # recorded is a cost that gets re-estimated wrongly later.
+    calls: int = 1
 
     @property
     def abstained(self) -> bool:
         return self.answer is None
+
+    @property
+    def flagged(self) -> tuple[ClaimVerdict, ...]:
+        """The claims this judgement says are false. Empty unless it is a per-claim one."""
+        return tuple(v for v in self.claim_verdicts if v.answer is True)
 
 
 class Judge(Protocol):
@@ -282,6 +373,52 @@ def _parse(text: str) -> tuple[bool | None, str | None, str | None, str, bool]:
         str(payload.get("reason", "")),
         False,
     )
+
+
+@dataclass(frozen=True)
+class _Reply:
+    """One raw model reply, before anything decides what verdict it carries.
+
+    Internal, and the boundary is chosen rather than incidental: everything here is a fact
+    about the CALL -- what came back, at what ceiling, from cache or from the wire, and
+    what it billed. Nothing here is a fact about documentation. That is what lets one
+    implementation serve both a judge that asks about a page and a judge that asks about
+    eight claims, without either one reimplementing the token ladder.
+    """
+
+    text: str
+    stop_reason: str | None
+    truncated: bool
+    cached: bool
+    ceiling: int
+    retried: bool
+    input_tokens: int | None
+    output_tokens: int | None
+    blocks: tuple[str, ...] = ()
+
+    @property
+    def truncation_reason(self) -> str:
+        """What to put in a `reason` field when this reply never finished.
+
+        Two wordings, because they are two different situations for the reader and were
+        two separate messages before this class existed. A cached truncation at the top
+        rung means the ladder is exhausted and the flag has to go higher; a fresh one
+        means the flag has not been tried yet. Telling a reader to raise a flag they
+        already raised is the kind of small lie that costs an hour.
+        """
+        blocks = ", ".join(self.blocks) or "none"
+        if self.cached:
+            return (
+                f"TRUNCATED at {self.ceiling} tokens, the highest ceiling on the ladder "
+                f"(blocks: {blocks}). Still a harness failure, not an abstention -- raise "
+                "--retry-max-tokens further."
+            )
+        return (
+            f"TRUNCATED: the reply hit the {self.ceiling}-token ceiling "
+            f"(blocks: {blocks}). This is a harness failure, "
+            "not an abstention -- raise --retry-max-tokens and re-run; only the "
+            "truncated replies are re-paid for."
+        )
 
 
 class AnthropicJudge:
@@ -442,8 +579,20 @@ class AnthropicJudge:
             ladder.append(self.retry_max_tokens)
         return ladder
 
-    def judge(self, context: JudgeContext) -> Judgement:
-        prompt = render(context)
+    def _reply(self, context: JudgeContext, rendered: str) -> _Reply:
+        """One reply for one rendered user turn: cache walk, escalation, send, record.
+
+        Split out of `judge` so the per-claim judge can reuse every part of it that is
+        about the API and the cache rather than about a verdict -- the ladder, the key, the
+        write-before-parse, the usage accounting. It takes `rendered` rather than deriving
+        it, because a per-claim call's user turn is a batch of claims and not the page.
+
+        Everything below the parse is unchanged from when this was inline, deliberately:
+        the ladder's correctness argument depends on the details (send at the HIGHEST
+        ceiling, reuse a complete reply from any rung, never re-send a reply that already
+        died at the top rung) and re-deriving them in a second place is how the two copies
+        drift.
+        """
         # Walk the ladder cheapest-first and reuse the first COMPLETE cached reply. A
         # truncated one is not a usable answer, so it does not stop the walk -- it is the
         # thing the next rung exists to replace.
@@ -461,7 +610,8 @@ class AnthropicJudge:
 
         for ceiling in ceilings:
             key = context_hash(
-                context, self.system, self.model, request=self._request(ceiling)
+                context, self.system, self.model,
+                request=self._request(ceiling), rendered=rendered,
             )
             path = self._cache_path(key)
             if path is None or not path.exists():
@@ -470,19 +620,17 @@ class AnthropicJudge:
             if payload.get("stop_reason") == "max_tokens":
                 truncated_cached[ceiling] = payload
                 continue
-            raw = payload["text"]
-            answer, claim, code, reason, unparsed = _parse(raw)
-            return Judgement(
-                example_id=context.example_id, arm=context.arm, judge=self.name,
-                answer=answer, claim=claim, code=code, reason=reason,
-                unparsed=unparsed, cached=True,
-                truncated=False, stop_reason=payload.get("stop_reason"),
-                max_tokens_used=ceiling, retried=was_retried(ceiling),
+            return _Reply(
+                text=payload["text"],
+                stop_reason=payload.get("stop_reason"),
+                truncated=False, cached=True,
+                ceiling=ceiling, retried=was_retried(ceiling),
                 # `.get`, because entries written before usage was recorded have no
                 # such key. Absent is reported as unknown, never as zero -- a missing
                 # count summed as zero would make a cached run look free.
                 input_tokens=payload.get("input_tokens"),
                 output_tokens=payload.get("output_tokens"),
+                blocks=tuple(payload.get("blocks") or ()),
             )
 
         # Nothing complete on disk. Send at the HIGHEST ceiling rather than the lowest,
@@ -492,27 +640,22 @@ class AnthropicJudge:
         # only buy a second call for the hard cases.
         ceiling = ceilings[-1]
         request = self._request(ceiling)
-        key = context_hash(context, self.system, self.model, request=request)
+        key = context_hash(
+            context, self.system, self.model, request=request, rendered=rendered
+        )
         path = self._cache_path(key)
         if ceiling in truncated_cached:
             # The top of the ladder is on disk and died there. Return it as truncated
             # rather than calling again: a second identical request would be paid for and
             # would hit the same ceiling. Raise --retry-max-tokens further.
             payload = truncated_cached[ceiling]
-            answer, claim, code, reason, unparsed = _parse(payload["text"])
-            return Judgement(
-                example_id=context.example_id, arm=context.arm, judge=self.name,
-                answer=answer, claim=claim, code=code, unparsed=unparsed, cached=True,
-                reason=(
-                    f"TRUNCATED at {ceiling} tokens, the highest ceiling on the ladder "
-                    f"(blocks: {', '.join(payload.get('blocks') or []) or 'none'}). "
-                    "Still a harness failure, not an abstention -- raise "
-                    "--retry-max-tokens further."
-                ),
-                truncated=True, stop_reason="max_tokens",
-                max_tokens_used=ceiling, retried=was_retried(ceiling),
+            return _Reply(
+                text=payload["text"], stop_reason="max_tokens",
+                truncated=True, cached=True,
+                ceiling=ceiling, retried=was_retried(ceiling),
                 input_tokens=payload.get("input_tokens"),
                 output_tokens=payload.get("output_tokens"),
+                blocks=tuple(payload.get("blocks") or ()),
             )
 
         # Every argument here is accepted by the installed SDK's signature, asserted
@@ -521,7 +664,7 @@ class AnthropicJudge:
         response = self._ensure_client().messages.create(
             model=self.model,
             system=self.system,
-            messages=[{"role": "user", "content": prompt}],
+            messages=[{"role": "user", "content": rendered}],
             **request,
         )
         blocks = list(getattr(response, "content", []) or [])
@@ -556,22 +699,235 @@ class AnthropicJudge:
                 ),
                 encoding="utf-8",
             )
-        answer, claim, code, reason, unparsed = _parse(raw)
-        if stop_reason == "max_tokens":
+        return _Reply(
+            text=raw, stop_reason=stop_reason,
+            truncated=stop_reason == "max_tokens", cached=False,
+            ceiling=ceiling, retried=was_retried(ceiling),
+            input_tokens=billed_in, output_tokens=billed_out,
+            blocks=tuple(kinds),
+        )
+
+    def judge_page(self, context: JudgeContext) -> Judgement:
+        """The per-page question. Named so the subclass can keep `judge` for its own."""
+        reply = self._reply(context, render(context))
+        answer, claim, code, reason, unparsed = _parse(reply.text)
+        if reply.truncated:
             # Said in the reason field too, not just counted, because this is the line a
             # reader sees next to the case when they go looking for why it abstained.
             # Names the ceiling that was actually sent, not `self.max_tokens`, which is
             # the lowest rung and is not what this call used when the ladder escalated.
-            reason = (
-                f"TRUNCATED: the reply hit the {ceiling}-token ceiling "
-                f"(blocks: {', '.join(kinds) or 'none'}). This is a harness failure, "
-                "not an abstention -- raise --retry-max-tokens and re-run; only the "
-                "truncated replies are re-paid for."
-            )
+            reason = reply.truncation_reason
         return Judgement(
             example_id=context.example_id, arm=context.arm, judge=self.name,
             answer=answer, claim=claim, code=code, reason=reason, unparsed=unparsed,
-            truncated=stop_reason == "max_tokens", stop_reason=stop_reason,
-            max_tokens_used=ceiling, retried=was_retried(ceiling),
-            input_tokens=billed_in, output_tokens=billed_out,
+            truncated=reply.truncated, stop_reason=reply.stop_reason,
+            cached=reply.cached,
+            max_tokens_used=reply.ceiling, retried=reply.retried,
+            input_tokens=reply.input_tokens, output_tokens=reply.output_tokens,
+        )
+
+    # `judge` is the Judge protocol's method and stays the per-page one, so every existing
+    # caller and every cached reply is untouched by the arrival of the subclass below.
+    judge = judge_page
+
+
+def _parse_claims(text: str, count: int) -> tuple[list[tuple[int, bool | None, str | None, str]], bool]:
+    """Read a batch reply into `(n, answer, code, reason)` rows. Second value = unparsed.
+
+    Two failures are possible here that the single-verdict parser cannot have, and both are
+    handled by dropping rather than by guessing:
+
+    - An item whose `n` is missing, not an integer, or outside 1..count is dropped. It
+      cannot be aligned to a claim, and aligning it by position would attach a verdict to
+      whichever sentence happened to be next -- a silent mislabel, which is worse than a
+      missing one because every downstream number still computes.
+    - A duplicate `n` keeps the FIRST and drops the rest, so a reply that answers claim 3
+      twice cannot have its second answer overwrite its first depending on dict ordering.
+
+    A reply short of `count` items is not an error here. The claims it did not answer become
+    abstentions, counted and visible, which is the honest reading of a model that stopped.
+    """
+    match = _JSON_ARRAY_RE.search(text)
+    if not match:
+        return [], True
+    try:
+        payload = json.loads(match.group(0))
+    except json.JSONDecodeError:
+        return [], True
+    if not isinstance(payload, list):
+        return [], True
+    rows: list[tuple[int, bool | None, str | None, str]] = []
+    seen: set[int] = set()
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        try:
+            number = int(item.get("n"))
+        except (TypeError, ValueError):
+            continue
+        if not 1 <= number <= count or number in seen:
+            continue
+        verdict = str(item.get("verdict", "")).strip().lower()
+        if verdict not in _VERDICT_TO_BOOL:
+            continue
+        seen.add(number)
+        code = item.get("code")
+        rows.append(
+            (
+                number,
+                _VERDICT_TO_BOOL[verdict],
+                str(code) if code else None,
+                str(item.get("reason", "")),
+            )
+        )
+    # Nothing alignable came back, from a reply that was valid JSON. That is a parse
+    # failure in every sense that matters -- there is no verdict in it -- and calling it
+    # anything else would score it as agreement with the page.
+    return rows, not rows
+
+
+class PerClaimJudge(AnthropicJudge):
+    """Asks about the page's claims a batch at a time, instead of the page all at once.
+
+    The measured reason this exists: the per-page judge returned `not-false` on a
+    38,830-character page having reasoned only about its opening, with an empty `claim`
+    field, and putting the cut sentence on screen flipped 0 of 3 such cases. More page did
+    not get the claim read, so the question had to get smaller.
+
+    Three properties worth stating before the number arrives, because they are what the
+    arm is for rather than side effects:
+
+    1. Every verdict has a located subject, known before the call rather than quoted back.
+       The per-page arm's 7 false negatives include 5 that quoted no claim at all, which
+       makes them unauditable; none of these can be.
+    2. The page's tail is reachable. Units are enumerated from `doc_full`, so a claim at
+       character 22,461 is asked about on equal terms with one at character 200.
+    3. It can be scored two ways off the same replies -- aggregate, and restricted to the
+       claims the fixing commit was actually about. The second is the construct-validity
+       measurement this project has carried as an open problem since stage 3 began, and it
+       needs a located verdict to exist at all.
+
+    Costs and risks, stated with them: the page body is not in the prompt, so a sentence
+    qualified by its neighbours can read as false, and precision should be expected to
+    fall. A page with no marked-up prose sentence yields no units and abstains by
+    construction. And the batch is a shared reply budget -- eight claims answered in one
+    6,000-token ceiling -- so truncation here loses up to eight verdicts rather than one,
+    which is why `calls` and the truncation count are reported per case.
+    """
+
+    def __init__(self, *, batch_size: int = DEFAULT_BATCH, **kwargs) -> None:
+        kwargs.setdefault("system", CLAIM_SYSTEM_PROMPT)
+        super().__init__(**kwargs)
+        if batch_size < 1:
+            raise ValueError(f"batch size must be at least 1, got {batch_size}")
+        self.batch_size = batch_size
+        # The batch size is in the name because it is part of the experiment and two
+        # settings must not collide in one results file -- the same reason the lexical
+        # judge carries its threshold. It is NOT separately in the cache key and does not
+        # need to be: it decides which claims share a user turn, so it is already visible
+        # in the rendered text the key is computed over.
+        self.name = f"per-claim/{batch_size}:{self.model}" + (
+            f"({self.effort})" if self.effort else ""
+        )
+
+    def judge(self, context: JudgeContext) -> Judgement:
+        # From the UNTRUNCATED page. Enumerating from `doc_text` would reinstate the exact
+        # failure this arm exists to fix; see `JudgeContext.doc_full`.
+        units = claim_units(context.doc_full or context.doc_text)
+        if not units:
+            return Judgement(
+                example_id=context.example_id, arm=context.arm, judge=self.name,
+                answer=None, calls=0,
+                reason=(
+                    f"no claim unit on this page ({len(context.doc_full)} chars): no prose "
+                    "sentence marks up an identifier, so there was nothing to ask about. "
+                    "An abstention by construction, not by judgement -- the per-page judge "
+                    "would at least have been shown this page."
+                ),
+            )
+
+        verdicts: list[ClaimVerdict] = []
+        truncated = False
+        unparsed_batches = 0
+        billed_in = billed_out = 0
+        usage_seen = False
+        cached_all = True
+        retried_any = False
+        ceiling_used: int | None = None
+        calls = 0
+
+        for offset, group in enumerate(batch(units, self.batch_size)):
+            rendered = render_claim_batch(context, group)
+            reply = self._reply(context, rendered)
+            calls += 1
+            cached_all = cached_all and reply.cached
+            retried_any = retried_any or reply.retried
+            ceiling_used = reply.ceiling
+            if reply.input_tokens is not None:
+                billed_in += reply.input_tokens
+                usage_seen = True
+            if reply.output_tokens is not None:
+                billed_out += reply.output_tokens
+                usage_seen = True
+            rows, failed = _parse_claims(reply.text, len(group))
+            if reply.truncated:
+                truncated = True
+            if failed:
+                unparsed_batches += 1
+            answered = {number: (answer, code, why) for number, answer, code, why in rows}
+            base = offset * self.batch_size
+            for position, claim in enumerate(group, start=1):
+                answer, code, why = answered.get(
+                    position,
+                    (
+                        None,
+                        None,
+                        reply.truncation_reason if reply.truncated
+                        else "no verdict for this claim in the batch reply",
+                    ),
+                )
+                verdicts.append(
+                    ClaimVerdict(
+                        index=base + position, claim=claim,
+                        answer=answer, code=code, reason=why,
+                    )
+                )
+
+        flagged = [v for v in verdicts if v.answer is True]
+        decided = [v for v in verdicts if v.answer is not None]
+        # Any-claim-false. One false sentence makes the page false about the code, which is
+        # what the corpus label means: the fixing commit corrected something. The
+        # alternative -- a majority, or a count threshold -- would be a second lever moving
+        # at the same time as the unit, and there is no measurement to justify one.
+        if flagged:
+            answer: bool | None = True
+        elif decided:
+            answer = False
+        else:
+            answer = None
+        return Judgement(
+            example_id=context.example_id, arm=context.arm, judge=self.name,
+            answer=answer,
+            claim=flagged[0].claim if flagged else None,
+            code=flagged[0].code if flagged else None,
+            reason=(
+                f"{len(flagged)} of {len(verdicts)} claim(s) false, "
+                f"{len(decided) - len(flagged)} not-false, "
+                f"{len(verdicts) - len(decided)} undecided, over {calls} call(s)"
+                + (f"; {unparsed_batches} batch reply/replies unreadable" if unparsed_batches else "")
+                + (f". {flagged[0].reason}" if flagged else "")
+            ),
+            # A batch that would not parse is an abstention on its claims, and the run has
+            # to be able to say so -- but it is only reported as an unparsed JUDGEMENT when
+            # it cost the case its whole answer. A page where 1 of 11 batches failed still
+            # has an answer, and flagging the case as unparsed would overstate the damage.
+            unparsed=unparsed_batches > 0 and answer is None,
+            truncated=truncated,
+            stop_reason="max_tokens" if truncated else None,
+            cached=cached_all,
+            max_tokens_used=ceiling_used, retried=retried_any,
+            input_tokens=billed_in if usage_seen else None,
+            output_tokens=billed_out if usage_seen else None,
+            claim_verdicts=tuple(verdicts),
+            calls=calls,
         )

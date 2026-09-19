@@ -286,6 +286,23 @@ class JudgeContext:
     # Paths that did not resolve at `at_sha`. read_blobs omits rather than blanks, so
     # without this a vanished file would silently become an absent code side.
     missing: tuple[str, ...] = field(default=())
+    # The page at `at_sha` with no budget applied, and it is NOT part of any prompt.
+    # `render` does not read it, so adding it left every existing cache key
+    # byte-identical -- the key is computed over the rendered text, not over this
+    # dataclass.
+    #
+    # It exists because the per-claim judge enumerates the claims on the page, and
+    # enumerating them from `doc_text` would rebuild the exact failure the per-claim
+    # design exists to fix: `doc_text` is cut at `DOC_BUDGET`, the claim that motivated
+    # all of this sits at character 22,461 of a 38,830-character page, and a judge asked
+    # only about the first 12,000 characters cannot reach it however many questions it is
+    # asked. Costing nothing in prompt tokens is what makes this affordable: the page is
+    # read to decide WHAT to ask, and only the chosen sentence is sent.
+    #
+    # Not miner evidence. This is the document as any reader of that commit would find
+    # it, which is the same standard `doc_text` meets; the things that must not reach a
+    # prompt are the fix, its diff and its shared identifiers, and none of them is here.
+    doc_full: str = ""
 
     @property
     def usable(self) -> bool:
@@ -481,6 +498,7 @@ class ContextBuilder:
             pool_size=len(pool),
             oracle_rank=oracle_rank,
             missing=tuple(missing),
+            doc_full=raw_doc,
         )
 
 
@@ -520,8 +538,68 @@ def render(context: JudgeContext) -> str:
     return "\n".join(parts)
 
 
+def render_claim_batch(context: JudgeContext, claims) -> str:
+    """The user turn for one batch of claims: the code, then the claims, and no page.
+
+    Two decisions here, and both are the design rather than formatting.
+
+    **The page body is absent.** Only the quoted sentences go in. That is what makes the
+    arm affordable -- the priced version of this design measured the shared part as the
+    context with no document in it, and putting the 12,000-character page back into all
+    168 calls returns the cost to roughly the naive 25x row it was chosen over. It is also
+    the point: the per-page judge had the whole page and did not audit it. What this gives
+    up is real and belongs in the predictions rather than in a footnote -- a sentence can
+    read as false out of the context that qualified it two paragraphs earlier, so this
+    arm should be expected to lose precision, not just gain recall.
+
+    **Code first, claims last.** Free to choose, because this rendering is new and every
+    key it produces is new whatever order it uses -- the first version of this reasoning
+    claimed the order would orphan the existing per-page cache, which was wrong and is
+    corrected in `scripts/claim_units.py`. Code first is kept anyway, for the one reason
+    that survives: it is the order in which a shared prefix would be cacheable if this
+    arm is ever run one claim to a call, and choosing it now costs nothing while choosing
+    it later would re-pay every reply.
+
+    The claims are numbered from 1 within the batch, and the reply is required to carry
+    the number back. Without that, a reply with fewer items than the batch cannot be
+    aligned to the claims it answered, and a silently shifted alignment scores every
+    verdict against the wrong sentence -- the same failure `parse_verdicts` avoids by
+    splitting on case headers rather than zipping.
+    """
+    parts = [
+        f"Repository: {context.repo}",
+        f"Documentation file: {context.doc_path}",
+        "",
+    ]
+    for code in context.code_files:
+        where = "the file the documentation is about" if code.rank is None else (
+            f"candidate {code.rank} of {len(context.code_files)} by identifier overlap"
+        )
+        parts.extend(
+            [
+                f"--- CODE: {code.path} ({where}) ---",
+                code.text,
+                f"--- END CODE: {code.path} ---",
+                "",
+            ]
+        )
+    if not context.code_files:
+        parts.append("(No code files were available for this document.)")
+        parts.append("")
+    parts.append("--- CLAIMS ---")
+    for number, claim in enumerate(claims, start=1):
+        parts.append(f"{number}. {claim}")
+    parts.append("--- END CLAIMS ---")
+    return "\n".join(parts)
+
+
 def context_hash(
-    context: JudgeContext, prompt: str, model: str, *, request: Mapping[str, object]
+    context: JudgeContext,
+    prompt: str,
+    model: str,
+    *,
+    request: Mapping[str, object],
+    rendered: str | None = None,
 ) -> str:
     """Cache key for a judgement: everything that could change the answer.
 
@@ -540,9 +618,22 @@ def context_hash(
     not been tried. A false claim about the code, in the docstring of a tool for
     finding false claims about code. The signature is now shaped so that a caller
     cannot forget the argument, which is the only version of this that stays true.
+
+    `rendered` overrides what gets hashed as the user turn, for a caller whose prompt is
+    not `render(context)` -- the per-claim judge, whose turn holds the code and one batch
+    of claims. It defaults to None meaning `render(context)`, so every key computed before
+    this parameter existed is byte-identical to the one computed now. That property is the
+    reason it is an override rather than a second function: two hash functions over the
+    same fields is how a subtle divergence gets introduced, and there is no way to notice
+    it except by a cache that stops hitting.
     """
     digest = hashlib.blake2b(digest_size=16)
-    pieces = [model, prompt, context.arm, render(context)]
+    pieces = [
+        model,
+        prompt,
+        context.arm,
+        render(context) if rendered is None else rendered,
+    ]
     # Sorted by key, so the same request written in a different order is the same hash
     # -- otherwise the invalidation this exists for would fire at random.
     pieces += [f"{name}={request[name]!r}" for name in sorted(request)]
