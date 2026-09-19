@@ -909,6 +909,95 @@ regenerable *in principle* is not the same as present. Three details are deliber
 - **Each record keeps a `frozen_from`** naming the mining run that produced it. That is the field
   needed to explain a case, and it is exactly what a naive concatenation drops.
 
+### The model arm, and it is a loss
+
+Four paid runs, roughly $5.90. The first three measured this harness rather than the model,
+and each is written up above. The fourth is the first readable model result. The probe in the
+section after this one adds two more runs and about $0.60.
+
+Seeded arm, 45 shape-A cases, k=5, document budget 12,000 characters, code budget 6,000
+windowed. **These floors are this arm's own** — the 105-case retrieved table above has
+different ones, and pairing a number with the wrong arm's floor flips how it reads:
+
+| judge | F1 | precision | recall | accuracy, answered | accuracy, all |
+|---|---|---|---|---|---|
+| `always-not-false` — the majority floor | 0.00 | 0.00 | 0.00 | **71.1%** | 71.1% |
+| `always-false` — the F1 floor | **0.448** | 0.289 | 1.00 | 28.9% | 28.9% |
+| `lexical-absence(>=1)` | 0.473 | 0.310 | 1.00 | 35.6% | 35.6% |
+| `lexical-absence(>=3)` | 0.481 | 0.317 | 1.00 | 37.8% | 37.8% |
+| `lexical-absence(>=6)` | **0.488** | 0.357 | 0.769 | 53.3% | 53.3% |
+| `model:claude-sonnet-5` | **0.364** | 0.364 | 0.364 | 57.6% | 42.2% |
+| *chance, 200 trials, p5–p95* | *0.087–0.457* | *0.100–0.467* | | | *48.9–68.9%* |
+
+**F1 0.364 is below every free judge that scores an F1 at all, and inside the chance range.** The
+one it beats is `always-not-false`, which scores 0.00 by construction and is the reason F1 is the
+primary metric — and on accuracy that same constant wins, 71.1% against 42.2%. So this is not a
+judge that is 36% good. It is worse than a stuck switch, and the thing beating it by 0.124 is
+`lexical-absence`, which this file has already called a constant with extra steps. It abstained
+on 12 of 45, and the confusion matrix on the 33 it answered is tp 4, fp 7, fn 7, tn 15.
+
+**Fixing the instrument made the number worse, and that is the most useful thing in this
+section.** The run before this one scored F1 0.421 — with 4 replies truncated at the token
+ceiling and 4 unparsed. Re-asking only the truncated ones took it to 0.364: false negatives
+went 5 → 7 and false positives 6 → 7, while true positives did not move. Truncation had been
+flattering the result, because two of the truncated cases are `drift` positives the model gets
+wrong once it has room, and **an abstention costs recall less than a wrong answer does.** An
+instrument's failures are not neutral. They tend to fail in the direction that reads well.
+
+Three things the tables do not say on their own:
+
+- **Abstention lift is not measured on this arm, and the printed 0.0 does not mean it is zero.**
+  The lift test compares abstention on the 20 held-out `unclear` cases against the scoreable
+  ones, and 0 of those 20 are in these 45. A metric with an empty denominator reports the same
+  number as a metric that came back clean.
+- **The only cell that looks good is the one marked unreadable.** Per-repo, pydantic scores F1
+  1.00 — on 8 cases, below the 10-case minimum this harness requires before it will call a cell
+  readable. The readable cells are flask 0.286 over 12 and requests 0.182 over 22.
+- **The error mode is false negatives, and they do not read as hedging.** All 7 say a version of
+  *this matches the source I was shown*, and 5 of the 7 quote no claim at all — so the prompt's
+  defensive "these are NOT false" list is not the mechanism it was suspected of being.
+
+### The document budget was the obvious fix, and it bought nothing
+
+Nine cases carry the recall loss: the 7 false negatives plus the 2 `drift` abstentions. Measured
+for free off the cache, on **3 of them the sentence the fixing commit deleted sat beyond the
+12,000-character document cut** — character 22,461 of a 38,830-character `docs/user/advanced.rst`
+— so the false claim was never in the prompt at all, and no code budget or better model could
+have reached it. Document truncation had been *counted* since the first paid run; whether the cut
+removed the claim under test was not asked until then.
+
+So the claim was put on screen: `--doc-budget 30000` over those nine, with nine predictions
+written down first. **No F1 from that probe is quotable** — the cases were selected because they
+failed, all nine are positive, and the run's own noise range is [1.0, 1.0, 1.0]. It is readable
+per case and nowhere else.
+
+**Zero of the three flipped.** Both 38,830-character cases came back `not-false` with an **empty
+claim field**, reasoning about `Session`, `merge_setting` and `hooks` — the *opening* of the page
+— and never reaching the region the claim lives in. Raising the budget also pushed two prompts
+past the reply ceiling, so changing the instrument moved the number for the third time in this
+project.
+
+Of the nine predictions, **5 were right and all 5 were about the harness**: which prompts would
+be cache hits, the control group holding, a token estimate accurate to 2.2%. Every prediction
+about the model was wrong, and they are kept here rather than revised:
+
+| predicted | measured |
+|---|---|
+| the 3 document-cut cases flip to `false` once the claim is visible | none of them flipped |
+| the case whose deleted prose is absent from its page does not flip | it flipped — to a correct `false`, about a *different* claim |
+
+That last row is the construct-validity problem arriving as a scored win. The flip was correct
+about `max_keepalive_connections` in the newly-visible text, which the fixing commit never
+touched, so the corpus cannot record it and the label it was scored against is about something
+else.
+
+**The conclusion is that context was the wrong lever, measured rather than assumed.** A bigger
+budget cannot help a judge that stopped reading before the claim; the binding constraint is that
+one question is asked about a whole page, and three of these pages are over 38,000 characters.
+The next thing to try is asking per claim, which is also the only version of this that makes
+construct validity checkable — a per-claim answer has a location, and a location can be compared
+against the median 1.6% of the page the commit actually touched.
+
 ## Roadmap
 
 | stage | state |
@@ -918,7 +1007,7 @@ regenerable *in principle* is not the same as present. Three details are deliber
 | 2b · Retrieval — embeddings, chunked and cached | **built, measured, lost 5/5** |
 | 2c · Hand-labelled docs, candidates = the whole tree — the ground truth 2b needs | **built, 18 docs labelled, split verdict** |
 | 2d · Cross-encoder reranker over `lexical`'s top 20, scored on both corpora | designed |
-| 3 · The judge — does a document make a false claim, at one commit | **harness built, floors run, model arm next** |
+| 3 · The judge — does a document make a false claim, at one commit | **built, measured, lost to every free floor** |
 | 4 · Null-run harness — same input twice, to establish the noise floor | designed |
 | 5 · GitHub App + CI eval gate | designed |
 
@@ -1001,7 +1090,22 @@ terminal, and executed as `--out` with no argument followed by a stray path. A f
 wrap is a flag that silently runs something else.
 
 Replies are cached under `.cache/judgements`, keyed by content rather than by case id, so
-re-running is free and editing the prompt is not.
+re-running is free and editing the prompt is not. The client is built on the first cache miss
+rather than at startup, so re-scoring an arm that is fully cached needs no key at all.
+
+Four flags exist because of what that key contains. `--max-tokens` is inside it, so raising the
+ceiling to rescue a handful of truncated replies would re-pay for every complete one alongside
+them — about $3 to repair $0.25 on this arm. **`--retry-max-tokens` re-asks only the replies that
+died at the ceiling**, which is sound rather than a fudge because a ceiling is not a behavioural
+setting: a reply that stopped on `end_turn` at 1,800 tokens is byte-identical whether the limit it
+never approached was 6,000 or 12,000. Both `--doc-budget` and `--code-budget` are in the key too,
+but only *through the rendered context*, which cuts the other way and is worth exploiting —
+raising the document budget leaves a page shorter than the old budget byte-identical, so it re-uses
+that reply for free and cannot change its answer. Every one of them is recorded in the score
+file's provenance block, because a flag that changes the cache key changed the result.
+
+`--only-cases` takes ids or `@file`, and prints a warning that its F1 is not a result: a set
+chosen because those cases previously failed is selected on the outcome being measured.
 
 **Caching is the default and opting out is the flag**, which is the way round that matters here.
 The corpus is 8148 unique code blobs behind 629 trees, so a forgotten cache produces an identical
