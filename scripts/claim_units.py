@@ -19,14 +19,20 @@ times the whole context.
     section 1  claim units per page, and the distribution, because a median hides the
                38,830-character pages that motivated this
     section 2  input tokens under four designs, as multiples of what is already paid
-    section 3  what the prompt's current section ORDER costs, which is the finding
+    section 3  what the prompt's current section ORDER costs, and what decides the
+               design once order turns out not to
 
-Section 3 is the one that changes a decision. `render` puts the document first and the
-code after it, so under per-claim prompting the varying part sits at the FRONT of the
-prompt and no shared prefix exists to cache. Reordering it -- code first, claim last --
-is what makes the design affordable, and reordering is inside the cache key, so it
-orphans every judgement already bought. That is a thing to get right once rather than
-discover after a run.
+`render` puts the document first and the code after it, so under per-claim prompting the
+varying part sits at the FRONT of the prompt and no shared prefix exists to cache.
+Reordering it -- code first, claim last -- is what makes the cached design affordable.
+
+An earlier version of this docstring added that the reordering orphans every judgement
+already bought, and drew the design decision from that. It does not: a per-claim arm
+needs a new rendering whatever order it picks, so both designs start from an empty cache
+and order is free. What separates them is the CALL COUNT -- output tokens, and whether
+the advertised price depends on cache hits the harness cannot verify in advance. Section
+3 prints both. The wrong version is in this file's own commit message, which is pushed
+and is left alone; corrections belong in the file, not in rewritten history.
 
 WHAT A "CLAIM UNIT" IS HERE, and it is a proxy rather than a definition: a sentence from
 the page's prose that marks up at least one identifier, using the same `literal_spans`
@@ -217,7 +223,7 @@ def main() -> int:
         "\n  than below it, so read these as the whole design's shape and not as a bill."
     )
 
-    print("\nSECTION 3 -- the prompt's section order is what decides this")
+    print("\nSECTION 3 -- the prompt's section order, and why it is NOT the tiebreak")
     print(
         "  `render` emits the DOCUMENT first and the code after it. Under per-claim\n"
         "  prompting the claim is the part that varies, so it sits at the front and\n"
@@ -226,9 +232,35 @@ def main() -> int:
         "  claim last is the same information in the other order, and it is the\n"
         "  difference between an arm that can be run and one that cannot.\n"
         "\n"
-        "  That reordering is INSIDE the cache key -- it changes the rendered context --\n"
-        "  so it orphans every judgement already paid for on every arm. It is therefore\n"
-        "  a decision to take once, before the first per-claim call, and not a tweak."
+        "  CORRECTION, and the first version of this section got it backwards. It said\n"
+        "  the reordering orphans every judgement already bought, because it is inside\n"
+        "  the cache key. The premise is true of `render` and the conclusion does not\n"
+        "  follow: a per-claim arm needs a NEW rendering either way -- the claim has to\n"
+        "  reach the prompt somehow -- so both designs produce new keys and neither can\n"
+        "  reuse one existing reply. Order is free to choose here. A false claim about\n"
+        "  this code, in this repository, is the fourth of its kind and is left visible\n"
+        "  rather than quietly rewritten."
+    )
+    # The two reasons that DO separate the designs, and both are about the call count
+    # rather than the token count, which is why the input table above cannot see them.
+    out_per_call = 3_900
+    print(
+        f"""
+  WHAT ACTUALLY DECIDES IT, now that order does not:
+
+  1. OUTPUT. The cached design needs {calls_claim:,} replies to batching's {calls_batch:,}, a
+     {calls_claim / calls_batch:.1f}x ratio in CALL count, and output is billed above input. The
+     only anchor is ~{out_per_call:,} output tokens a call on the per-page prompt; at even
+     half that per call, {calls_claim:,} calls is several times batching's reply volume.
+     Input parity ({cached_priced / page_total:.1f}x against {batched / page_total:.1f}x) is therefore not cost parity, and
+     the input table above is the thing that cannot see it.
+
+  2. WHAT EACH ONE NEEDS TO BE TRUE. Batching needs nothing. The {cached_priced / page_total:.1f}x needs
+     every one of a page's calls to land inside the prompt cache's TTL, in order,
+     with the prefix byte-identical. If that does not hold, the design does not
+     cost {cached_priced / page_total:.1f}x -- it costs the {naive / page_total:.0f}x row, because the reads are simply
+     fresh input. A price that can move {naive / cached_priced:.0f}-fold on a behaviour the harness
+     cannot check beforehand is the worse bet at equal advertised cost."""
     )
     return 0
 
