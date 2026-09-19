@@ -2,7 +2,9 @@
 
     PYTHONPATH=scripts uv run python scripts/claim_units.py
 
-Free: git and the renderer only, no API call and no cache read. Written because the
+Free: git, the renderer, and the usage already recorded in `.cache/judgements`. No API
+call and nothing sent -- it reads bills that have been paid, which is the only honest
+source for the output half of section 3. Written because the
 doc-budget probe settled that the judge does not audit a whole page -- it answered
 `not-false` with an empty claim field on a 38,830-character page, reasoning only about
 the opening and never reaching the sentence under test at character 22,461. The lever
@@ -55,6 +57,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import json
 import statistics
 from pathlib import Path
 
@@ -78,11 +81,46 @@ def tokens(prompt: str) -> int:
     return int(spend["input_tokens_approx"])
 
 
+def billed_output(cache: Path) -> dict[str, float] | None:
+    """Output tokens a call, READ OFF the replies already paid for, or None if none are.
+
+    The first version of section 3 asserted "the last paid run averaged ~3,900 output
+    tokens a call" and hardcoded it. The cache disagrees: over the replies with usage
+    recorded, the mean is nearer 1,700 and the median nearer 700, so ~3,900 is about the
+    90th percentile of a long-tailed distribution being quoted as its centre. It
+    overstated the output half of the design by roughly 2.3x, in the EXPENSIVE-looking
+    direction -- the safe direction for a go/no-go, and still a made-up number in the
+    file whose whole job is to not print one. Sixth false claim about this code found
+    inside this project, after the fence body two paragraphs up in the module docstring.
+
+    So it is measured now rather than asserted, and the skew is printed rather than
+    averaged away, because a mean over these is not a typical call.
+    """
+    tokens_out = []
+    for path in sorted(cache.glob("*.json")):
+        try:
+            reply = json.loads(path.read_text())
+        except (OSError, ValueError):
+            continue
+        if reply.get("output_tokens") is not None:
+            tokens_out.append(int(reply["output_tokens"]))
+    if not tokens_out:
+        return None
+    return {
+        "n": len(tokens_out),
+        "mean": statistics.mean(tokens_out),
+        "median": statistics.median(tokens_out),
+        "p90": sorted(tokens_out)[int(len(tokens_out) * 0.9)],
+        "max": max(tokens_out),
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--review", type=Path, default=Path("review"))
     parser.add_argument("--data", type=Path, default=Path("data"))
     parser.add_argument("--clone-root", type=Path, default=Path(".cache/clones"))
+    parser.add_argument("--cache", type=Path, default=Path(".cache/judgements"))
     parser.add_argument("--arm", default="seeded", choices=("oracle", "seeded"))
     args = parser.parse_args()
 
@@ -196,10 +234,10 @@ def main() -> int:
     )
     print(
         "\n  INPUT ONLY. Output is billed too, at a higher rate, and it scales with the"
-        "\n  CALL count rather than the token count -- the last paid run averaged ~3,900"
-        f"\n  output tokens a call, so {calls_batch:,} calls is roughly four times the reply volume of"
-        "\n  45. That lands the multiplier for the total near the input multiplier rather"
-        "\n  than below it, so read these as the whole design's shape and not as a bill."
+        f"\n  CALL count rather than the token count: {calls_batch:,} calls is {calls_batch / calls_page:.1f}x the reply"
+        f"\n  volume of {calls_page}. That lands the multiplier for the total near the input"
+        "\n  multiplier rather than below it, so read these as the whole design's shape"
+        "\n  and not as a bill."
     )
 
     print("\nSECTION 3 -- the prompt's section order, and why it is NOT the tiebreak")
@@ -222,15 +260,32 @@ def main() -> int:
     )
     # The two reasons that DO separate the designs, and both are about the call count
     # rather than the token count, which is why the input table above cannot see them.
-    out_per_call = 3_900
+    billed = billed_output(args.cache)
+    if billed is None:
+        anchor = (
+            "     There is NO anchor for output on this machine: no cached reply carries\n"
+            "     usage, so the output half of this argument is unmeasured. It rests on\n"
+            "     the call ratio alone, which is enough for the direction and not for a\n"
+            "     figure."
+        )
+    else:
+        anchor = (
+            f"     Output per call, off the {billed['n']} replies already paid for: median\n"
+            f"     {billed['median']:,.0f}, mean {billed['mean']:,.0f}, p90 {billed['p90']:,.0f}, max {billed['max']:,} -- long-tailed, so read the\n"
+            f"     median and not the mean. Those are PER-PAGE replies and neither design\n"
+            "     sends that prompt: a single-claim reply is shorter and a batch of\n"
+            f"     {BATCH} is longer, so this does NOT multiply out to a total for either.\n"
+            "     What it does bound is the FIXED part -- the preamble and the reasoning\n"
+            f"     every reply pays before its first verdict. {calls_claim:,} replies pay that\n"
+            f"     {calls_claim / calls_batch:.1f}x as often as {calls_batch:,} do, on the same {sum(counts):,} verdicts."
+        )
     print(
         f"""
   WHAT ACTUALLY DECIDES IT, now that order does not:
 
   1. OUTPUT. The cached design needs {calls_claim:,} replies to batching's {calls_batch:,}, a
-     {calls_claim / calls_batch:.1f}x ratio in CALL count, and output is billed above input. The
-     only anchor is ~{out_per_call:,} output tokens a call on the per-page prompt; at even
-     half that per call, {calls_claim:,} calls is several times batching's reply volume.
+     {calls_claim / calls_batch:.1f}x ratio in CALL count, and output is billed above input.
+{anchor}
      Input parity ({cached_priced / page_total:.1f}x against {batched / page_total:.1f}x) is therefore not cost parity, and
      the input table above is the thing that cannot see it.
 
