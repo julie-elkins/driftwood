@@ -1,0 +1,69 @@
+# The nine cases that cost the 2026-09-19 seeded arm its recall: seven false negatives
+# and the two `drift` abstentions. Produced by
+#
+#     uv run python scripts/unit_mismatch_audit.py --arm seeded --retry-max-tokens 12000
+#
+# and re-bucketed by
+#
+#     PYTHONPATH=scripts uv run python scripts/budget_sweep.py
+#
+# which measures both sides and disagrees with the audit on two of the nine. Read with
+# `judge-eval --only-cases @scripts/recall-costing-9.txt`, which prints its own warning:
+# these ids were selected because they failed, so no F1 over them is a result.
+#
+# The sections below are the sweep's buckets, not the audit's. The audit looked only at
+# code and found "5 budget-cut / 3 wrong-file / 1 genuine miss"; asking the same question
+# of the DOCUMENT side moves the binding constraint on three of them, because on those
+# three the sentence the fixing commit deleted was past the 12,000-character doc cut and
+# so was never in the prompt at all.
+#
+# PROBED AND SETTLED, 2026-09-19 -- do not re-run this. `--doc-budget 30000` over these nine
+# (`data/scores/judge-seeded-doc30k.json`, then `-retry.json` at `--retry-max-tokens 12000`;
+# 7 paid calls, ~$0.6) put the cut claim on screen on all three doc-cut cases and flipped NONE
+# of them. Both 38,830-char cases came back `not-false` with an EMPTY `claim` field, reasoning
+# only about the opening of the page -- `Session`, `merge_setting`, `hooks` -- never reaching
+# character 22,461 where the claim under test sits. So the doc cut below is a real mechanism and
+# not a fix: the judge is asked one question about a whole page and does not audit all of it.
+# The next lever is per-claim prompting, not a bigger budget. Raising the doc budget also
+# lengthened two prompts past the reply ceiling, which is why the retry run exists at all.
+#
+# THE CLAIM WAS NOT IN THE PROMPT -- doc-cut, so unanswerable rather than answered wrongly.
+# No code budget reaches these; the doc budget has to move first. Measured: moving it is
+# necessary and not sufficient -- see the block above.
+3b7710af3aaa1c49   # psf/requests  docs/user/advanced.rst   38,830-char page, claim at ~22,461: needs doc 30,000. Code side: encoding, header at 36,000
+f6ff7af97ac3c31c   # psf/requests  docs/user/advanced.rst   same page, same two numbers
+884f8d4776cb8b02   # pallets/flask docs/api.rst             13,748-char page, claim head at ~523 but its TAIL is past 12,000: needs doc 18,000. Code side: send, signal, test_client at 9,000
+#
+# THE DELETED PROSE IS NOT IN THE PARENT PAGE AT ALL -- 0 of its 3 word 4-grams are
+# findable in the 40,364-char page. Not a budget finding in either dimension: either the
+# page was reformatted by the same commit or the mined diff is not literal prose. Needs
+# eyes on the diff before it is counted as anything. PROBED: at doc 30,000 it answered `false`
+# and scored as a true positive -- on `max_keepalive` / `max_keepalive_connections`, a claim in
+# the newly-visible region that the fixing commit never touched. The shingle test was right and
+# the case still flipped; those are different facts. Construct validity arriving as a win.
+04a332fe0dc498cc   # encode/httpx  docs/advanced.md
+#
+# NOT RECOVERABLE BY ANY BUDGET -- the audit put this in the budget bucket and the sweep
+# contradicts it. Claim fully on screen at 12,000 (7,067-char page, never truncated). The
+# two "cut definitions" are `handler = handler_map.get(cls)` and
+# `testing = ConfigAttribute("TESTING")` in an 88,074-char `src/flask/app.py`, which the
+# windower never reaches even at 48,000 -- stuck at 3/5 at every candidate. A local
+# assignment is not a definition of a documented thing, so this is the generic-identifier
+# artefact the audit's own caveat predicted, not a budget failure.
+0eea9dc58ea4a754   # pallets/flask docs/signals.rst
+#
+# NO DEFINITION IN ANY SHOWN FILE -- retrieval selected wrong. Claim on screen at 12,000
+# on all three, nothing at stake on the code side at any budget, so neither budget can fix
+# them: these three are the control group. If raising a budget flips one of them, the
+# budget/selection split was wrong. PROBED: it held. Only `e7df7223` was live for the doc lever
+# -- the other two pages are shorter than the OLD budget, so raising it left their prompts
+# byte-identical and they came back as free cache hits, structurally unable to flip. A control
+# group of one that held is the probe's one clean positive result, and it is thin.
+65463185f227a96c   # psf/requests  README.md               2,927-char page
+d0f54d7f2b930191   # psf/requests  docs/index.rst          3,451-char page
+e7df72235ade950f   # psf/requests  docs/user/quickstart.rst 18,216-char page, claim at ~5,564
+#
+# BOTH SIDES WERE ADEQUATE AND IT STILL SAID NOT-FALSE -- claim on screen at 12,000,
+# `with_appcontext` defined on screen at 6,000. The one case in the nine where no context
+# change is available as an excuse.
+756ac020b878f26e   # pallets/flask docs/tutorial/database.rst
