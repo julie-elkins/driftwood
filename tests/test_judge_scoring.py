@@ -93,7 +93,7 @@ class TestTheConstantFloors:
             pytest.skip("mined labels not present")
         cases, _ = load_cases(REPO_ROOT / "review", data)
 
-        # Both floors MOVED when `review/batch.md` was labelled, and the always-drift one
+        # Both floors MOVED when `shape-A-batch-03.md` was labelled, and the always-drift one
         # is the one that matters: F1 0.444 -> 0.415 on 130 scoreable instead of 105. Every
         # stage-3 F1 in the README was quoted against 0.444. A judge that scored 0.43 was
         # below the old floor and is above the new one, so this is not bookkeeping -- the

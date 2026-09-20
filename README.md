@@ -1391,9 +1391,10 @@ Recovered from git; the guard is the actual fix.
 `sample` now refuses on the same terms, and that hole was found by looking for the same
 class rather than by hitting it again. It is the worse of the two: `mine` writes derived
 data, whereas a filled review sheet is hand labels and nothing regenerates a judgement.
-The example above used to name `review/batch.md`, which is a **real filled sheet** — so
-following the README as printed destroyed 25 verdicts, and at the time that file was
-untracked, so there would have been no git copy to recover from. A test now asserts that
+The example above used to name `review/batch.md` — a **real filled sheet**, since renamed
+`review/shape-A-batch-03.md` — so following the README as printed destroyed 25 verdicts,
+and at the time that file was untracked, so there would have been no git copy to recover
+from. A test now asserts that
 no usage example in this file names any sheet that actually exists under `review/`, because
 the guard makes the command safe and an example pointing at live data still invites a
 `--force`.

@@ -10,7 +10,8 @@ Fitting, for a project about documentation that has quietly stopped being true.
 
 And then the SAME hole was found in `sample`, which is worse: a review sheet holds
 hand labels, so a filled one is the only copy of a judgement nothing regenerates.
-The README's usage example writes to `review/batch.md` -- a real, filled sheet --
+The README's usage example wrote to `review/batch.md` -- a real, filled sheet, since
+renamed `review/shape-A-batch-03.md` --
 so following the README as printed destroyed 25 verdicts, and at the time that
 file was untracked, so unlike the `mine` case there would have been no git copy.
 Fixing one instance of a class and not looking for the others is how a fix becomes

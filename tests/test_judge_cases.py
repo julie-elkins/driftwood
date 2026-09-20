@@ -388,14 +388,14 @@ class TestTheCorpusIsSelfContained:
 class TestAgainstTheRealCorpus:
     """Pins the corpus, so a change to it cannot pass unnoticed.
 
-    These fired as seven failures the moment `review/batch.md` was filled in, which is
+    These fired as seven failures the moment `shape-A-batch-03.md` was filled in, which is
     the control working: the sheets are globbed, so the corpus grows whenever one is
     labelled, and every stage-3 number is measured against a denominator that just
     moved. Updating the literal is the *last* step of absorbing a new batch, not the
     first -- `driftwood judge-freeze` comes before it, or a clean checkout rebuilds the
     old corpus and these keep passing while the real one has grown.
 
-    **Only the 125-case numbers were pre-registered.** `review/batch.md` added 25 shape-A
+    **Only the 125-case numbers were pre-registered.** `shape-A-batch-03.md` added 25 shape-A
     cases with no prediction recorded beforehand, so the 150/130 literals below are a pin
     on an observed corpus and not a prediction that survived. Noted here rather than
     smoothed over, because the class used to say "pre-registered" about all of it.
@@ -412,7 +412,7 @@ class TestAgainstTheRealCorpus:
         assert tally.get("version_disagreements", 0) == 0
 
     def test_the_class_balance_holds(self, real):
-        # Batch 01's 30/75 WAS pre-registered and held. The 25 cases in `review/batch.md`
+        # Batch 01's 30/75 WAS pre-registered and held. The 25 cases in batch 03
         # were not predicted, and they came in at 4 positive / 21 negative -- 16% against
         # the established 28.6%. That gap is not readable at n=25 (1.4 sd on a binomial
         # at p=0.286), so it is recorded, not interpreted.
@@ -424,7 +424,7 @@ class TestAgainstTheRealCorpus:
         assert balance["majority_accuracy"] == pytest.approx(0.738, abs=0.001)
 
     def test_the_new_batch_held_out_nothing_and_that_has_a_mechanism(self, real):
-        # Batch 01 held out 20 of 125 as `unclear` (16%); `review/batch.md` held out 0 of
+        # Batch 01 held out 20 of 125 as `unclear` (16%); batch 03 held out 0 of
         # 25. Under a binomial at p=0.16 that is p≈0.013, which would be suspicious if it
         # had no mechanism -- and it has one: all 25 are shape A, so the reviewer had a
         # code file to read. Shape B is doc-only and every `unclear` in the corpus comes
