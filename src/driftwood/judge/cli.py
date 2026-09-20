@@ -47,6 +47,7 @@ from .evaluate import (
 from .claims import DEFAULT_BATCH, batch as claim_batch, claim_units
 from .judge import (
     CLAIM_SYSTEM_PROMPT,
+    DEFAULT_MAX_RETRIES,
     DEFAULT_MAX_TOKENS,
     SYSTEM_PROMPT,
     AlwaysJudge,
@@ -206,6 +207,7 @@ def _build_judges(args: argparse.Namespace) -> dict[str, object]:
             model=_model_from_judges(args.judges, args.model),
             cache_dir=args.cache, max_tokens=args.max_tokens,
             retry_max_tokens=args.retry_max_tokens, effort=args.effort,
+            max_retries=args.max_retries,
         )
         # Keyed by the judge's own name, which carries the effort setting when one was
         # chosen. Two efforts in one results file must not collide under `model:<model>`.
@@ -215,6 +217,7 @@ def _build_judges(args: argparse.Namespace) -> dict[str, object]:
             model=_model_from_judges(args.judges, args.model),
             cache_dir=args.cache, max_tokens=args.max_tokens,
             retry_max_tokens=args.retry_max_tokens, effort=args.effort,
+            max_retries=args.max_retries,
             batch_size=args.claim_batch,
         )
         judges[judge.name] = judge
@@ -625,6 +628,15 @@ def add_parser(subparsers) -> None:
              "re-pays every reply already bought: 4 truncated replies out of 45 cost ~$3 "
              "to repair that way and well under $1 this way. Sound because a ceiling a "
              "reply never reached cannot have changed it; 0 disables",
+    )
+    ev.add_argument(
+        "--max-retries", type=int, default=DEFAULT_MAX_RETRIES,
+        help="how many times the SDK re-sends a TRANSIENT failure -- connection errors, "
+             "408, 409, 429, 5xx -- with its own backoff. NOT in the cache key: a reply is "
+             "the same however many attempts delivered it, so this is the one knob here "
+             "that costs nothing to change. Raised from the SDK's 2 because a 168-call run "
+             "died at call 148. It does not make a run crash-proof, and it is not the "
+             "checkpoint -- the reply cache is, which is why that crash cost $0",
     )
     ev.add_argument(
         "--effort", choices=("low", "medium", "high"), default=None,

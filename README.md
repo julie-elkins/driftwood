@@ -998,6 +998,87 @@ The next thing to try is asking per claim, which is also the only version of thi
 construct validity checkable — a per-claim answer has a location, and a location can be compared
 against the median 1.6% of the page the commit actually touched.
 
+### Asking per claim instead: also a loss, and the refusals are the finding
+
+One question per sentence instead of one per page, eight sentences to a call. Same 45 shape-A
+cases, same k=5, same budgets, so the floors below are the same floors as the per-page table and
+are directly comparable to it. 45 of 45 answered or abstained, 0 replies truncated, ~$9.60 across
+both runs of the arm.
+
+| judge | F1 | precision | recall | accuracy, answered | abstained |
+|---|---|---|---|---|---|
+| `always-not-false` — the majority floor | 0.00 | 0.00 | 0.00 | **71.1%** | 0 |
+| `always-false` — the F1 floor | **0.448** | 0.289 | 1.00 | 28.9% | 0 |
+| `lexical-absence(>=6)` — the best free judge | **0.488** | 0.357 | 0.769 | 53.3% | 0 |
+| `model:claude-sonnet-5` — per page, for comparison | 0.364 | 0.364 | 0.364 | 57.6% | 12 |
+| `per-claim/8:claude-sonnet-5` | **0.333** | 0.333 | 0.333 | 56.8% | 8 |
+| `per-claim/8` **[located]** | 0.200 | **1.00** | 0.111 | 69.2% | 19 |
+| *chance, 200 trials, p5–p95* | *0.087–0.457* | *0.100–0.467* | | | |
+
+**F1 0.333 is below every free floor that scores an F1, and inside the chance range.** It is not a
+judge that is 33% good; `always-false` is a stuck switch and beats it by 0.115. It is *also* below
+the per-page judge's 0.364 on these same 45 cases — but 0.031 is far inside a noise band 0.37 wide,
+so **"worse than asking per page" is not established** and is not claimed. What is established, for
+the second arm in a row: neither paid judge beats a lexical baseline that costs nothing.
+
+#### The five predictions, as written down before the run
+
+1. **FALSIFIED.** "F1 rises above `always-false` 0.448." It fell, to 0.333. The reasoning was that
+   the false negatives came from never reaching the claim, and this removes that mechanism. The
+   mechanism was removed and the number went down, so the diagnosis was incomplete: not reaching
+   the claim was not what was costing the recall.
+2. **CONFIRMED.** "Abstentions fall below 12 of 45." 8 of 45, against the per-page judge's 12.
+3. **VOID, and unfalsifiable as written.** "The `claim` field is non-empty on every reply." The
+   reply schema never asks for a claim — the model answers by index and the text is attached
+   locally from the enumerated unit, so it could not have come back empty. Recorded as void rather
+   than confirmed: a prediction that cannot fail is not evidence.
+4. **CONFIRMED in direction, not in magnitude.** Precision fell, 0.364 → 0.333. Chance precision
+   here spans 0.100–0.467, so a move of 0.031 is inside the noise and the fall is not *shown*.
+5. **CONFIRMED.** Three pages returned ≥2 `false` verdicts about different claims, and all three
+   are hand-labelled `drift`. The per-page schema cannot express any of those answers.
+
+#### The finding nobody predicted, and it is the useful one
+
+Over **1,195 individual claim verdicts: 647 `not-false`, 526 `unclear`, 22 `false`.**
+
+**The judge declines on 44% of the claims it is asked about.** Asked about a whole page it answers;
+asked about one sentence with k=5 files of code, it says — correctly, by the prompt's own
+instruction — that what it needs to decide is not in front of it. This arm did not make the judge
+better at finding drift. It made it countable how often retrieval has not given it enough to
+judge, and the answer is nearly half the time. `answerability` already said so on this arm at a
+median 57% identifier coverage; 526 explicit refusals is that number with a voice.
+
+**That moves the next lever off the question and onto the code side**, which is stage 2d and costs
+nothing to try.
+
+#### The motivating page was caught, and the location check does not credit it
+
+`f6ff7af97ac3c31c` is the 38,830-character `docs/user/advanced.rst` whose deleted sentence sat at
+character 22,461 — the case the previous section could not reach at any document budget, and the
+reason this arm exists. Enumerated per claim it yields 74 units, 10 calls, and **two `false`
+verdicts on a page correctly answered `false`**. The mechanism worked on the case built for it.
+
+Neither of those two flagged sentences names an identifier the fixing commit touched. So the
+**[located]** row does not count it, and the same construct-validity problem the document probe
+surfaced as a flip arrives here as a scored win that cannot be attributed. Location-strict scoring
+finds exactly **one** case in 45 — `8c5f05476eef28d9`, 3 of its 9 flags on shared identifiers — at
+precision 1.00 and recall 0.111. **n=1 is not a result and is not quoted as one.** It remains the
+only signal in this project that a high-precision mode exists at all.
+
+#### Two harness notes, because both changed a number
+
+- **The token ceiling was flattering the result again.** The first run of this arm left 2 of 45
+  replies truncated at 6,000 tokens and still scored them from their surviving batches — partial
+  evidence counted as whole, which is quieter than a missing answer and worse. Re-asking only
+  those two took F1 from 0.30 over 41 cases to 0.333 over 45, and took `8c5f05476eef28d9` from 5
+  flagged claims to 9. Third time in this project that repairing the instrument moved the score.
+- **There is a hard ceiling at 21,333 output tokens, and it is the SDK's, not a choice.** A
+  non-streaming request whose `max_tokens` implies more than ten minutes is refused inside
+  `messages.create`, which on a fresh run means dying partway through after paying for every case
+  before it. `--retry-max-tokens 24000` did exactly that. Both ceilings are now checked when the
+  judge is constructed, so a bad value is a message instead of a bill; a rung above 21,333 needs
+  streaming, which is a change to `_reply` and not a flag.
+
 ## Roadmap
 
 | stage | state |

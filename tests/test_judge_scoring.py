@@ -26,7 +26,9 @@ from driftwood.judge.evaluate import (
     to_json,
 )
 from driftwood.judge.judge import (
+    DEFAULT_MAX_RETRIES,
     DEFAULT_MAX_TOKENS,
+    MAX_NONSTREAMING_MAX_TOKENS,
     SYSTEM_PROMPT,
     AlwaysJudge,
     AnthropicJudge,
@@ -696,6 +698,109 @@ class TestTheCallMatchesTheInstalledSDK:
         # docstring's claim that this harness has no determinism to lose has to be
         # revisited rather than quietly becoming false.
         assert not {"temperature", "top_p", "top_k"} & set(self._sent(tmp_path))
+
+
+class TestTheCeilingTheTransportWillActuallyAccept:
+    """`--retry-max-tokens 24000` parsed, laddered, and then died inside the SDK.
+
+    `ValueError: Streaming is required for operations that may take longer than 10
+    minutes`, raised from `messages.create` at the first truncated reply -- which on a
+    fresh run is partway through, after every earlier case has been paid for. Refusing at
+    construction costs nothing and turns that into a message.
+
+    The bound is asserted against the SDK's own function rather than against the
+    arithmetic in the comment, because the comment cannot notice the SDK changing its
+    default timeout and a re-derived number cannot be checked by reading it.
+    """
+
+    def _client(self):
+        anthropic = pytest.importorskip("anthropic")
+        return anthropic.Anthropic(api_key="not-a-real-key")
+
+    def test_the_constant_is_the_largest_ceiling_the_sdk_accepts(self):
+        client = self._client()
+        # Accepted at the constant, refused one token above it. Two assertions, because
+        # an off-by-one in either direction is invisible from one of them: too low and the
+        # harness refuses ceilings that would have worked, too high and it does not refuse
+        # the one that crashed.
+        client._calculate_nonstreaming_timeout(MAX_NONSTREAMING_MAX_TOKENS, None)
+        with pytest.raises(ValueError, match="Streaming is required"):
+            client._calculate_nonstreaming_timeout(MAX_NONSTREAMING_MAX_TOKENS + 1, None)
+
+    @pytest.mark.parametrize(
+        "kwargs",
+        [
+            {"max_tokens": MAX_NONSTREAMING_MAX_TOKENS + 1},
+            {"max_tokens": 6000, "retry_max_tokens": 24_000},
+        ],
+        ids=["base rung", "retry rung"],
+    )
+    def test_a_ceiling_above_it_refuses_before_any_call(self, tmp_path, kwargs):
+        # Either flag reaches `messages.create` unchanged, so checking only the base rung
+        # would leave the exact failure that prompted this in place.
+        with pytest.raises(ValueError, match="non-streaming"):
+            AnthropicJudge(cache_dir=tmp_path, model="m", **kwargs)
+
+    def test_the_reachable_top_rung_is_still_allowed(self, tmp_path):
+        judge = AnthropicJudge(
+            cache_dir=tmp_path, model="m", max_tokens=6000,
+            retry_max_tokens=MAX_NONSTREAMING_MAX_TOKENS,
+        )
+        assert judge._ceilings() == [6000, MAX_NONSTREAMING_MAX_TOKENS]
+
+
+class TestTheRetryCountIsTransportAndNotExperiment:
+    """`max_retries` reaches the SDK client and nothing else. Pin both halves.
+
+    Two failures this guards, and they fail in opposite directions:
+
+    1. A constructor keyword the installed SDK does not accept. `_StubClient` is passed
+       in ready-made by every test above, so `_ensure_client()` -- the only place this
+       argument is used -- is never exercised by them. That is exactly the hole
+       `temperature` went through: the run died after the spend estimate printed.
+    2. The keyword leaking into the cache key. It is a transport setting; a reply is
+       byte-identical however many attempts delivered it. If it reached `_request()` or
+       the judge's name, raising the default would re-pay every reply on disk -- about
+       $12 of measurement history -- for nothing.
+    """
+
+    def test_max_retries_is_an_argument_the_real_sdk_constructor_accepts(self):
+        anthropic = pytest.importorskip("anthropic")
+        signature = inspect.signature(anthropic.Anthropic.__init__)
+        kinds = {p.kind for p in signature.parameters.values()}
+        assert inspect.Parameter.VAR_KEYWORD not in kinds, (
+            "Anthropic.__init__ now absorbs arbitrary keywords, so binding no longer "
+            "rejects a bad argument; this test needs a different check"
+        )
+        # `None` stands in for `self`, as above: the signature is read off the unbound
+        # function. Binding the value the judge would actually send, not a literal.
+        signature.bind_partial(None, max_retries=DEFAULT_MAX_RETRIES)
+
+    def test_the_client_is_built_with_the_configured_count(self, tmp_path, monkeypatch):
+        anthropic = pytest.importorskip("anthropic")
+        # A key is required to construct the client and is never sent anywhere: no
+        # request is made here, so this stays free and works offline.
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "not-a-real-key")
+        judge = AnthropicJudge(cache_dir=tmp_path, model="m", max_retries=5)
+        client = judge._ensure_client()
+        assert isinstance(client, anthropic.Anthropic)
+        assert client.max_retries == 5
+
+    def test_changing_it_does_not_move_the_cache_key(self, tmp_path):
+        default = AnthropicJudge(cache_dir=tmp_path, model="m", max_tokens=6000)
+        patient = AnthropicJudge(
+            cache_dir=tmp_path, model="m", max_tokens=6000, max_retries=64
+        )
+        assert default._request() == patient._request() == {"max_tokens": 6000}
+        context = _context("c1")
+        assert context_hash(
+            context, SYSTEM_PROMPT, "m", request=default._request()
+        ) == context_hash(
+            context, SYSTEM_PROMPT, "m", request=patient._request()
+        )
+        # And not in the judge's name either, which is the results file's key: two
+        # retry counts are the same experiment and must land in the same row.
+        assert default.name == patient.name
 
 
 class TestTheResultsFile:

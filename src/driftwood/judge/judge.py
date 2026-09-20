@@ -46,7 +46,9 @@ from .claims import DEFAULT_BATCH, batch, claim_units
 from .context import JudgeContext, context_hash, render, render_claim_batch
 
 __all__ = [
+    "DEFAULT_MAX_RETRIES",
     "DEFAULT_MAX_TOKENS",
+    "MAX_NONSTREAMING_MAX_TOKENS",
     "AlwaysJudge",
     "AnthropicJudge",
     "Judge",
@@ -74,6 +76,53 @@ __all__ = [
 # reasoning is adaptive, so a ceiling this high is paid for only on the cases that
 # need it.
 DEFAULT_MAX_TOKENS = 6000
+
+# How many times the SDK re-sends a request that failed transiently -- connection errors,
+# 408, 409, 429 and 5xx -- with its own exponential backoff. Raised from the SDK's default
+# of 2 because a 168-call run died at call 148, wrote no score file, and the arm had to be
+# re-walked; 8 attempts across that backoff is minutes of waiting against a run that has to
+# start again.
+#
+# Two things this is NOT, because the commit that deferred it said "nothing retries a
+# transient API error" and that was imprecise in a way worth correcting here:
+#
+# 1. It was never zero. The SDK retried twice already, so the error that killed the run
+#    either exhausted two attempts or was never in the retryable set at all -- no log was
+#    kept, so which of those it was is unknown. Raising the count lowers the odds of the
+#    first and does nothing about the second. This is not a guarantee that a run finishes.
+# 2. It is not the checkpoint. The checkpoint already exists and is the reply cache: every
+#    reply is written to disk as it arrives, which is why recovering that run cost $0 and
+#    not $5.52. What a crash still costs is wall-clock, and a second checkpoint next to a
+#    working one would be two mechanisms to keep honest.
+#
+# Deliberately NOT in the cache key, and `_request()` is where the key's request comes from,
+# so this constant is invisible to it. A reply is byte-identical regardless of how many
+# attempts the transport needed to deliver it, and putting a transport setting in the key
+# would re-pay every reply on disk -- roughly $12 of measurement history -- to record
+# something that cannot have changed an answer.
+DEFAULT_MAX_RETRIES = 8
+
+# The highest ceiling a NON-STREAMING request may ask for. Not a policy of this repo --
+# the SDK computes `3600 * max_tokens / 128_000` as an expected duration, refuses anything
+# over its 600-second default timeout, and 600 * 128_000 / 3600 is 21,333.33.
+#
+# Checked here, at construction, because of how it failed: `--retry-max-tokens 24000` was
+# accepted by argparse, accepted by the ladder, and then raised `ValueError: Streaming is
+# required for operations that may take longer than 10 minutes` from inside
+# `messages.create` -- at the first truncated reply, which on a fresh run is somewhere in
+# the middle, after money has been spent on every case before it. That is the same shape
+# as the `temperature` failure: a request the harness was happy with and the transport
+# was not, discovered at the worst available moment.
+#
+# The floor-only judges are unaffected, so this must not be a module-import check: it
+# belongs to the judge that makes requests. And it is a bound on what can be ASKED FOR,
+# not on what a reply costs -- a reply that stops at 1,800 tokens is billed for 1,800
+# whatever the ceiling was.
+#
+# What it forecloses: a claim batch that genuinely needs more than 21,333 output tokens
+# cannot be answered by this harness without streaming, which is a real change to
+# `_reply` and not a flag. If the ladder ever needs a rung above this, that is the work.
+MAX_NONSTREAMING_MAX_TOKENS = 21_333
 
 # The prompt is part of the experiment, so it is versioned with the code and hashed
 # into the cache key. Three things in it are load-bearing:
@@ -466,12 +515,16 @@ class AnthropicJudge:
         max_tokens: int = DEFAULT_MAX_TOKENS,
         retry_max_tokens: int | None = None,
         effort: str | None = None,
+        max_retries: int = DEFAULT_MAX_RETRIES,
         system: str = SYSTEM_PROMPT,
         client=None,
     ) -> None:
         self.model = model
         self.system = system
         self.max_tokens = max_tokens
+        # Transport, not experiment: see DEFAULT_MAX_RETRIES. It reaches the SDK client and
+        # never `_request()`, so it is absent from the cache key and from the judge's name.
+        self.max_retries = max_retries
         # The ceiling a TRUNCATED reply is retried at, and the reason it exists is
         # arithmetic. `max_tokens` is inside the cache key, so raising it invalidates
         # every reply already paid for: fixing the 4 replies that hit the ceiling on the
@@ -486,6 +539,21 @@ class AnthropicJudge:
         # hit its ceiling gets re-requested, which is why `judge()` escalates rather than
         # reporting the truncated reply, and why the CLI counts both numbers out loud.
         self.retry_max_tokens = retry_max_tokens
+        # Both rungs, because either one reaches `messages.create` unchanged, and named in
+        # the message because the two come from different flags. See
+        # MAX_NONSTREAMING_MAX_TOKENS: this is the check that turns a mid-run transport
+        # crash into a refusal before the first call.
+        for flag, ceiling in (
+            ("--max-tokens", max_tokens), ("--retry-max-tokens", retry_max_tokens),
+        ):
+            if ceiling is not None and ceiling > MAX_NONSTREAMING_MAX_TOKENS:
+                raise ValueError(
+                    f"{flag} {ceiling:,} exceeds {MAX_NONSTREAMING_MAX_TOKENS:,}, the most "
+                    "a non-streaming request may ask for: the SDK raises `Streaming is "
+                    "required for operations that may take longer than 10 minutes` from "
+                    "inside the call, so this would have died partway through a paid run "
+                    "rather than here. Streaming `_reply` is the fix, not a bigger number."
+                )
         # None means "whatever the API does by default", which is what the first run
         # measured. Left unset rather than pinned to a value, because a default is the
         # honest thing to report a judge's behaviour at -- and because the one
@@ -549,7 +617,11 @@ class AnthropicJudge:
                     "`uv sync --extra judge` and try again."
                 ) from exc
 
-            self._client = Anthropic()
+            # `max_retries` is asserted against the real constructor's signature in the
+            # tests, for the same reason the request is: a stub client that takes
+            # `**kwargs` cannot reject an argument the SDK does not have, and the one
+            # time that went unchecked the run died after the spend estimate printed.
+            self._client = Anthropic(max_retries=self.max_retries)
         return self._client
 
     def _cache_path(self, key: str) -> Path | None:
