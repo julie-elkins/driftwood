@@ -636,6 +636,89 @@ run's, so a low-trial run claimed forty trials and understated its own noise ran
 explained the `lexical-ablated` row whether or not that row existed, implying numbers had been
 bounded for circularity when they had not. Both are now parameterised, gated, and tested.
 
+## Stage 2d: term frequency, one readable gain in five, and four predictions that cost nothing to keep
+
+`Lexical` scores IDF-weighted **set** overlap — a token is present or it is not. Its own docstring
+named the missing increment and the weakness it would fix: set overlap has no notion of a token
+being *central* to a file, so two incidental shared helpers outrank one class named eleven times.
+`LexicalTF` adds BM25's saturating factor `tf / (tf + k1)` on the candidate side and nothing else.
+
+**One lever, and the nesting is what makes that checkable.** IDF unchanged (still document
+frequency, so the weighting is not itself a function of term frequency). Length normaliser
+unchanged — still the square root of the candidate's *distinct* token count; normalising by total
+length against the pool average is full BM25 and a second experiment. Query side untouched, so the
+ablation arm measures exactly what it measured before. As `k1 → 0` the factor is 1 for every token
+present at all and the score collapses onto `Lexical`'s **exactly**; a test pins that by ranking
+this repository's own source tree with both and asserting identical order, including the
+zero-scoring tail. A loss is therefore attributable to term frequency rather than to a rewrite.
+
+The saturating form is chosen *because* of the docstring's argument, not despite it. "A doc
+mentioning `HTTPTransport` once is about the transport module, and it being mentioned eleven times
+in the code does not make it more so" is an argument against **raw** term frequency — which is what
+a first attempt reaches for — and not against a bounded one.
+
+### The result, and it is one repo out of five
+
+fastapi, 685-file median pool, 82 queries:
+
+| arm | R@10 | MRR |
+|---|---|---|
+| `lexical-ablated` | 0.606 | 0.455 |
+| `lexical-tf(k1=1.2)-ablated` | **0.649** | **0.484** |
+| Δ | +0.043 | +0.029 |
+| noise width on this repo | 0.037 | 0.027 |
+
+Both clear their noise width, and both clear it *barely*. On the other four repos every gap is
+inside noise, and on httpx, requests and pydantic the MRR sign is negative. So: **term frequency
+buys a readable gain on the 685-file pool and nothing that can be shown anywhere else.** That repo
+is the hardest of the five and the one where the dense arm's loss was also individually readable,
+which is the only reason the cell is worth reporting rather than being the best of thirty.
+
+`lexical-tf` does not become the baseline. One readable repo of five does not replace the floor
+every committed number is measured against, so it is an extra row and `--tf-k1` stays off by
+default — a run without it prints a table byte-identical to the committed ones, which is what makes
+two months' results diffable by eye.
+
+### Four predictions written before the run, and the run was free
+
+Free is the reason they were written down. A no-cost experiment can be re-run until it agrees with
+whatever was hoped for, and nothing in the artefacts would record that it had been.
+
+1. **FALSIFIED — on the repo the prediction named as most likely to falsify it.** "No repo moves
+   further from `lexical` than its own noise width." True on four, false on fastapi. Naming fastapi
+   in advance, because its 0.027 width was the narrowest of the five, is the whole difference
+   between this being a result and being a fishing expedition.
+2. **HALF CONFIRMED, and the confirmed half was not worth writing.** Predicted positive on both
+   large pools; fastapi (685) yes, **pydantic (101) negative**. The small-pool half was predicted
+   "ambiguous" and came out ambiguous — but a prediction of ambiguity cannot fail, and one of five
+   slots went to it.
+3. **CONFIRMED, and this is the one that had to hold.** The `lexical` − `lexical-ablated` gap did
+   not widen: 0.012→0.014, 0.021→0.018, 0.019→0.018, 0.025→**0.013**, 0.018→0.018. Term frequency
+   is not amplifying the mining rule's own evidence tokens, which is how this experiment could
+   have produced a number that looked like retrieval and was circularity.
+4. **CONFIRMED.** The 2c hand-labelled corpus cannot answer this either way. 14 queries; two repos
+   unchanged to two decimal places and requests 1.00 → 0.83 MRR against a noise range 0.62 wide.
+   That move is **one query slipping from rank 1 to rank 2 out of three** — (1/3)(1 − 1/2) = 0.167
+   — which is what n=3 looks like once it is written as a number with two decimals.
+
+A fifth prediction covered a k1 sweep over {0.5, 1.2, 2.0} and was **confirmed**: the largest
+spread across the three settings was 0.030 MRR against that repo's 0.138 width, and every cell on
+every repo sits inside the noise. There is no best k1 in this data; 1.2 is kept because BM25 uses
+it, not because it won. The sweep does show one thing that is not noise even though its magnitude
+is unreadable — **the sign is consistent within a repo across all three settings**, rising
+monotonically with k1 on fastapi and flask and falling monotonically on the other three. The
+direction is a property of the repo. It is not pool size (flask is 35 files and rises, pydantic is
+101 and falls) and no mechanism is claimed for it here.
+
+### What it changes for the reranker, which is the next thing
+
+The bar on fastapi is now `lexical-tf(k1=1.2)-ablated` R@10 0.649 rather than 0.606 — raising the
+bar before building the thing that has to clear it is why this ran first. The candidate-set
+decision needs re-measuring rather than re-deciding: "lexical@20 is the best candidate set on all
+five repos" was measured on `lexical`, and this eval reports k ∈ {1, 5, 10}, so **nothing here says
+what `lexical-tf@20` recall is.** And the binding cap is untouched: 13% of queries are missed by
+every arm at k=10, and reranking cannot surface what retrieval never returned.
+
 ## Reproducibility
 
 Every mine writes a manifest next to its output recording each repo's pinned sha, the commit
@@ -1087,6 +1170,7 @@ only signal in this project that a high-precision mode exists at all.
 | 2 · Retrieval — free baselines against a shuffled floor | **built, measured** |
 | 2b · Retrieval — embeddings, chunked and cached | **built, measured, lost 5/5** |
 | 2c · Hand-labelled docs, candidates = the whole tree — the ground truth 2b needs | **built, 18 docs labelled, split verdict** |
+| 2d · Term frequency in `Lexical`, one lever, nested | **built, measured, readable on 1 repo of 5** |
 | 2d · Cross-encoder reranker over `lexical`'s top 20, scored on both corpora | designed |
 | 3 · The judge — does a document make a false claim, at one commit | **built, measured, lost to every free floor** |
 | 4 · Null-run harness — same input twice, to establish the noise floor | designed |
@@ -1124,6 +1208,18 @@ treats already-judged cases, which is valid for subtractive rule changes only.
 the tree that query's judgement was made at. It prints the dataset — pool sizes, per-repo
 query concentration, lost positives — before any metric, on the grounds that a recall figure
 without its pool size is not checkable by the person reading it.
+
+The term-frequency arm is likewise off unless asked for, so a run without it prints a table
+byte-identical to the committed ones:
+
+```
+uv run driftwood retrieve-eval data/mine.jsonl --tf-k1 --out data/scores/retrieval-tf.json
+uv run driftwood doc-eval review/2c/SHEET.md --tf-k1 --out data/scores/doclabel-tf.json
+```
+
+`--tf-k1` bare means 1.2, BM25's conventional value; passing a number sweeps it. `--tf-k1 0`
+reproduces `lexical` exactly, which is the check that the added row differs from the baseline by
+one term and not by a rewrite.
 
 The dense arm is off unless a model is named, so everything above runs with no inference stack
 installed:

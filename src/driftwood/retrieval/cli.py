@@ -10,9 +10,10 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections import Counter
 from pathlib import Path
 
-from . import DEFAULT_MODEL, dataset, evaluate
+from . import DEFAULT_MODEL, dataset, evaluate, rankers
 
 __all__ = ["add_parser"]
 
@@ -93,6 +94,9 @@ def _run(args: argparse.Namespace) -> int:
     # it is keyed by file contents, so a file unchanged across two hundred shas is
     # tokenised once.
     token_cache: dict[str, frozenset[str]] = {}
+    # Separate dict, because the values are Counters rather than frozensets. Shared
+    # across repos for the same reason `token_cache` is.
+    count_cache: dict[str, Counter[str]] = {}
 
     dense_factory, provenance, embed_cache = _build_dense(args)
 
@@ -104,6 +108,8 @@ def _run(args: argparse.Namespace) -> int:
                 null_trials=args.null_trials,
                 token_cache=token_cache,
                 dense=dense_factory,
+                count_cache=count_cache,
+                tf_k1=args.tf_k1,
             )
         )
         # Saved per repo rather than once at the end: a run over five repos takes long
@@ -203,6 +209,7 @@ def _run_doc_eval(args: argparse.Namespace) -> int:
 
     dense_factory, provenance, embed_cache = _build_dense(args)
     token_cache: dict[str, frozenset[str]] = {}
+    count_cache: dict[str, Counter[str]] = {}
     results = []
     for split in splits:
         if not split.queries:
@@ -213,6 +220,8 @@ def _run_doc_eval(args: argparse.Namespace) -> int:
                 null_trials=args.null_trials,
                 token_cache=token_cache,
                 dense=dense_factory,
+                count_cache=count_cache,
+                tf_k1=args.tf_k1,
             )
         )
         if embed_cache is not None:
@@ -251,6 +260,27 @@ def _run_doc_eval(args: argparse.Namespace) -> int:
         args.out.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
         print(f"\nwrote {args.out}")
     return 0
+
+
+def _add_tf_args(parser: argparse.ArgumentParser) -> None:
+    tf = parser.add_argument_group(
+        "term-frequency arm",
+        "Off unless --tf-k1 is given. Off by default so a run without it produces a "
+        "table byte-identical to every committed one: `lexical` is the free baseline "
+        "every later stage is measured against, and a baseline whose rows move when a "
+        "new ranker is added is not a floor.",
+    )
+    tf.add_argument(
+        "--tf-k1",
+        type=float,
+        nargs="?",
+        const=rankers.DEFAULT_K1,
+        default=None,
+        help="score `lexical-tf` beside `lexical`: the same ranker plus saturating term "
+        f"frequency on the candidate side, at this k1 (bare flag: {rankers.DEFAULT_K1}, "
+        "BM25's conventional value). k1 -> 0 collapses onto `lexical` exactly, which is "
+        "what makes a loss attributable to term frequency rather than to a rewrite.",
+    )
 
 
 def _add_dense_args(parser: argparse.ArgumentParser) -> None:
@@ -341,6 +371,7 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
         "noise range from too few trials overstates how readable a gain is.",
     )
     parser.add_argument("--out", type=Path, default=None, help="also write JSON")
+    _add_tf_args(parser)
     _add_dense_args(parser)
     parser.set_defaults(func=_run)
 
@@ -403,5 +434,6 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
         "finding rather than a nuisance.",
     )
     doc_eval.add_argument("--out", type=Path, default=None, help="also write JSON")
+    _add_tf_args(doc_eval)
     _add_dense_args(doc_eval)
     doc_eval.set_defaults(func=_run_doc_eval)

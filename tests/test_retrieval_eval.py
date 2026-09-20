@@ -18,7 +18,9 @@ import pytest
 from driftwood.retrieval import evaluate
 from driftwood.retrieval.dataset import Query, format_dataset_report
 from driftwood.retrieval.rankers import (
+    DEFAULT_K1,
     Lexical,
+    LexicalTF,
     PathOverlap,
     Shuffle,
     path_tokens,
@@ -309,6 +311,127 @@ class TestLexical:
         assert ranked == ["src/real.py", "src/empty.py"]
 
 
+class TestLexicalTF:
+    """One lever added to `Lexical`, and the tests are about that being true.
+
+    The reason this class is mostly about NESTING rather than about the new ranker
+    winning: a reimplementation that scored better would be uninterpretable, because a
+    rewrite and a term-frequency factor are two changes and the table has one column.
+    """
+
+    def test_k1_of_zero_reproduces_lexical_exactly_on_real_source_text(self):
+        """The limit that makes a result attributable. At k1=0 the factor
+        `tf / (tf + k1)` is 1 for every token present at all, and the IDF and the
+        length normaliser are untouched -- so the ORDER must be identical, not merely
+        correlated.
+
+        Run over the project's own files rather than a fixture: a two-file pool has
+        too few ties for an ordering difference to show up, and the zero-scoring tail
+        is where a rewrite's disagreement with `_stable_order` would hide.
+        """
+        from pathlib import Path
+
+        code = {
+            str(path): path.read_text(encoding="utf-8")
+            for path in sorted(Path("src/driftwood").rglob("*.py"))
+        }
+        pool = sorted(code)
+        doc = Path("README.md").read_text(encoding="utf-8")
+
+        baseline = Lexical(code).rank("README.md", doc, pool)
+        nested = LexicalTF(code, k1=0.0).rank("README.md", doc, pool)
+
+        assert nested == baseline
+
+    def test_term_frequency_fixes_the_weakness_lexical_s_own_docstring_names(self):
+        """The same pool as
+        `TestLexical.test_two_shared_tokens_beat_one_even_when_the_one_is_rarer`, which
+        records set overlap's main weakness: a doc names one unusual class from module A
+        and two incidental helpers from module B, and B ranks first. Here the class is
+        named eleven times in the file it belongs to, and that is the signal set
+        overlap throws away.
+
+        This is the experiment, not a passing assertion about it. Whether the flip is
+        worth anything on the real corpora is what the eval measures; all this pins is
+        that the lever moves the thing it was added to move -- and, on the third line,
+        that it is the lever doing it rather than anything else in the new class.
+        """
+        code = {
+            "src/transport.py": "class HTTPTransport: pass\n" + "HTTPTransport()\n" * 10,
+            "src/helpers.py": "def headers(): ...\ndef cookie(): ...",
+        }
+        doc = "Uses `HTTPTransport`, plus `headers` and `cookie`."
+        pool = sorted(code)
+
+        assert Lexical(code).rank("d.md", doc, pool)[0] == "src/helpers.py"
+        assert LexicalTF(code).rank("d.md", doc, pool)[0] == "src/transport.py"
+        assert LexicalTF(code, k1=0.0).rank("d.md", doc, pool)[0] == "src/helpers.py"
+
+    def test_the_query_side_is_untouched_so_repeating_a_word_in_the_doc_changes_nothing(
+        self,
+    ):
+        """Held still deliberately. BM25 has a query-term-frequency factor too, and
+        adding it here would be a second lever -- and would change what `exclude`
+        operates on, which is the measurement that bounds circularity on this corpus.
+        """
+        code = {
+            "src/transport.py": "class HTTPTransport: session = None",
+            "src/client.py": "class Bland: session = None",
+        }
+        pool = sorted(code)
+        ranker = LexicalTF(code)
+
+        once = ranker.rank("d.md", "See `HTTPTransport`.", pool)
+        many = ranker.rank("d.md", "`HTTPTransport` " * 40, pool)
+
+        assert once == many
+
+    def test_the_ablation_arm_still_bites(self):
+        """`exclude` is honoured, and it has to be: the ablated row is the defensible
+        number on the mined corpus, so a ranker that quietly ignored the exclude set
+        would report a circular score as a bounded one."""
+        code = {
+            "src/transport.py": "class HTTPTransport: pass\n" * 11,
+            "src/other.py": "def unrelated(): ...",
+        }
+        pool = sorted(code)
+        ranker = LexicalTF(code)
+
+        assert ranker.rank("d.md", "See `HTTPTransport`.", pool)[0] == "src/transport.py"
+        ablated = ranker.rank(
+            "d.md", "See `HTTPTransport`.", pool, frozenset({"httptransport"})
+        )
+        assert ablated == pool  # nothing scores, so the stable tiebreak decides
+
+    def test_the_row_name_carries_k1_so_two_settings_cannot_collide(self):
+        code = {"src/a.py": "def thing(): ..."}
+
+        assert LexicalTF(code).name == f"lexical-tf(k1={DEFAULT_K1:g})"
+        assert LexicalTF(code, k1=0.0).name == "lexical-tf(k1=0)"
+        assert LexicalTF(code, k1=2.5).name == "lexical-tf(k1=2.5)"
+
+    def test_a_negative_k1_is_refused_rather_than_inverting_the_ranker(self):
+        """At k1 < -1 the factor goes negative and a token mentioned often counts
+        AGAINST a file. That is not a setting anyone means, and it produces a plausible
+        table."""
+        with pytest.raises(ValueError, match="k1"):
+            LexicalTF({"src/a.py": "def thing(): ..."}, k1=-1.0)
+
+    def test_the_count_cache_is_keyed_by_contents_not_by_path(self):
+        """Same reasoning as `Lexical`'s cache, and the same measurement depends on
+        it: queries are scored at ~350 shas and most files are byte-identical between
+        them. A path-keyed cache would miss every one of those hits."""
+        cache = {}
+        LexicalTF({"src/a.py": "def parse_headers(): ..."}, cache)
+        assert len(cache) == 1
+
+        LexicalTF({"pkg/renamed.py": "def parse_headers(): ..."}, cache)
+        assert len(cache) == 1, "same bytes at a new path should reuse the entry"
+
+        LexicalTF({"src/a.py": "def parse_headers(): pass"}, cache)
+        assert len(cache) == 2, "different bytes at the same path must not reuse it"
+
+
 class TestReporting:
     """`build` needs a real clone; `test_read_blobs.py` covers the git side. Here
     only the reporting contract, which is where a caveat gets silently dropped."""
@@ -433,3 +556,32 @@ class TestTheFooterDescribesTheRunAndNotTheDefaults:
         text = evaluate.format_results([self._result("lexical"), self._result("dense")])
         assert "The bar for dense is `lexical` PER REPO" in text
         assert "REDACTS" not in text
+
+    def test_a_long_ranker_name_widens_the_column_instead_of_shifting_the_numbers(self):
+        """`lexical-tf(k1=1.2)-ablated` is 26 characters against a column that was 17.
+
+        An overflowing name pushes the figures right on its own line only, so one row's
+        R@1 sits under the next row's R@5. Nothing errors and every number is correct;
+        the table just reads as a different table, which is the failure mode this whole
+        module exists to catch.
+        """
+        rows = [self._result("lexical"), self._result("lexical-tf(k1=1.2)-ablated")]
+        lines = evaluate.format_results(rows, null_trials=8).splitlines()
+
+        columns = [line.index("0.10") for line in lines if "0.10" in line]
+        assert len(columns) == len(rows)
+        assert len(set(columns)) == 1
+        # Both are right-aligned in the same 7-wide field, so their last characters land
+        # on the same column even though the strings are different lengths.
+        assert lines[0].index("R@1") + 3 == columns[0] + 4
+
+    def test_a_table_with_no_long_name_keeps_the_width_it_always_had(self):
+        """So a run without --tf-k1 produces a table diffable against the committed
+        ones by eye. A results file that reflows when an unrelated ranker is added
+        cannot be compared against last month's."""
+        rows = [self._result("shuffle (floor)"), self._result("lexical-ablated")]
+        header = evaluate.format_results(rows, null_trials=8).splitlines()[0]
+
+        assert header == f"{'repo':<20}{'ranker':<17}{'pool~':>6}{'n':>5}" + "".join(
+            f"{'R@' + str(k):>7}" for k in (1, 5, 10)
+        ) + f"{'MRR':>7}"

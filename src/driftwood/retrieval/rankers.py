@@ -21,9 +21,17 @@ from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Protocol
 
-from ..mining.identifiers import MIN_TOKEN_LENGTH, extract
+from ..mining.identifiers import MIN_TOKEN_LENGTH, extract, extract_counts
 
-__all__ = ["Lexical", "PathOverlap", "Ranker", "Shuffle", "path_tokens"]
+__all__ = [
+    "DEFAULT_K1",
+    "Lexical",
+    "LexicalTF",
+    "PathOverlap",
+    "Ranker",
+    "Shuffle",
+    "path_tokens",
+]
 
 
 class Ranker(Protocol):
@@ -228,4 +236,110 @@ class Lexical:
             scores[candidate] = sum(self._idf.get(t, 0.0) for t in shared) / math.sqrt(
                 len(tokens)
             )
+        return _stable_order(scores, pool)
+
+
+# Saturation constant for `LexicalTF`. BM25's k1, and the same value BM25 conventionally
+# uses. `tf / (tf + k1)` at 1.2 scores one mention at 0.45 and eleven at 0.90, so a token
+# repeated eleven times is worth about twice one repeated once -- not eleven times.
+#
+# The saturating form is chosen because of the argument in `Lexical`'s docstring, not
+# despite it: "a doc mentioning `HTTPTransport` once is about the transport module, and it
+# being mentioned eleven times in the code does not make it more so". That is an argument
+# against RAW term frequency, and raw tf is what a first attempt reaches for. It is not an
+# argument against a bounded one.
+DEFAULT_K1 = 1.2
+
+
+@dataclass
+class LexicalTF:
+    """`Lexical` plus saturating term frequency on the candidate side. One lever.
+
+    The cheapest unrun experiment in the project, and `Lexical`'s own docstring named it:
+    "Term frequency is the next increment if this underperforms, and it is a cheap one."
+    It is scored BESIDE `lexical` rather than replacing it, because the free baseline is
+    what every later stage has to beat and a baseline that moves under it is not a floor.
+
+    **It nests the baseline, which is what makes a result attributable.** As `k1` goes to
+    zero, `tf / (tf + k1)` goes to 1 for every token that is present at all, and the score
+    collapses exactly onto `Lexical`'s. So this is not a reimplementation that happens to
+    be similar -- it is the same ranker with one term added, and a loss can be attributed
+    to term frequency rather than to a rewrite. A test pins that limit.
+
+    Three things deliberately held still, because the project's own rule is that two
+    levers moved at once make a recovered case unattributable:
+
+    1. **IDF is unchanged**, same smoothed document-frequency weight over the same
+       per-tree candidate pool.
+    2. **The length normaliser is unchanged** -- `sqrt` of the candidate's DISTINCT token
+       count. Full BM25 would normalise by total length against the pool average, which
+       is a second lever and a different experiment. Noted as the next increment after
+       this one, not folded into it.
+    3. **The query side is untouched.** BM25 has a query-term-frequency factor; adding it
+       here would also change what `exclude` operates on, and ablation is the measurement
+       that bounds circularity on this corpus. It stays exactly as strong as it was.
+    """
+
+    name: str = "lexical-tf"
+
+    def __init__(
+        self,
+        code_texts: dict[str, str],
+        token_cache: dict[str, Counter[str]] | None = None,
+        k1: float = DEFAULT_K1,
+    ) -> None:
+        if k1 < 0:
+            raise ValueError(f"k1 must not be negative, got {k1}")
+        self.k1 = k1
+        # The name carries k1 for the same reason `lexical-absence` carries its threshold
+        # and the per-claim judge carries its batch size: the eval sweeps it, and two
+        # settings must not collide in one results table under one row.
+        self.name = f"lexical-tf(k1={k1:g})"
+        # Content-keyed, exactly as `Lexical`'s cache is and for the same reason -- most
+        # files are byte-identical across the ~350 shas scored. A SEPARATE cache from
+        # `Lexical`'s, and it has to be: the values are Counters rather than frozensets,
+        # so sharing one dict would hand whichever ranker ran second the wrong type.
+        cache = token_cache if token_cache is not None else {}
+        self._counts: dict[str, Counter[str]] = {}
+        for path, text in code_texts.items():
+            digest = hashlib.blake2b(text.encode("utf-8", "replace"), digest_size=16)
+            key = digest.hexdigest()
+            counts = cache.get(key)
+            if counts is None:
+                counts = extract_counts(text, versions=True)
+                cache[key] = counts
+            self._counts[path] = counts
+        document_count = max(len(self._counts), 1)
+        frequency: Counter[str] = Counter()
+        for counts in self._counts.values():
+            # DOCUMENT frequency, so this counts files rather than mentions. Feeding the
+            # Counter straight in would make IDF a function of term frequency too, which
+            # would double-count the very thing under test and make the comparison
+            # against `Lexical` meaningless.
+            frequency.update(counts.keys())
+        self._idf = {
+            token: math.log(1 + (document_count - count + 0.5) / (count + 0.5))
+            for token, count in frequency.items()
+        }
+
+    def rank(
+        self,
+        doc_path: str,
+        doc_text: str,
+        pool: list[str],
+        exclude: frozenset[str] = frozenset(),
+    ) -> list[str]:
+        wanted = extract(doc_text, versions=True) - exclude
+        scores: dict[str, float] = {}
+        for candidate in pool:
+            counts = self._counts.get(candidate)
+            if not counts:
+                continue
+            shared = wanted & counts.keys()
+            if not shared:
+                continue
+            scores[candidate] = sum(
+                self._idf.get(t, 0.0) * (counts[t] / (counts[t] + self.k1))
+                for t in shared
+            ) / math.sqrt(len(counts))
         return _stable_order(scores, pool)

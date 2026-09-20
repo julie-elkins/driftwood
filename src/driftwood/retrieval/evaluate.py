@@ -29,13 +29,13 @@ estimate.
 from __future__ import annotations
 
 import statistics
-from collections import defaultdict
+from collections import Counter, defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass
 
 from ..mining.gitio import read_blobs
 from .dataset import Query, RepoSplit
-from .rankers import Lexical, PathOverlap, Ranker, Shuffle
+from .rankers import Lexical, LexicalTF, PathOverlap, Ranker, Shuffle
 
 __all__ = [
     "DEFAULT_KS",
@@ -120,6 +120,12 @@ def evaluate_split(
     null_trials: int = NULL_TRIALS,
     token_cache: dict[str, frozenset[str]] | None = None,
     dense: Callable[[dict[str, str]], Ranker] | None = None,
+    # Separate from `token_cache` because the values are Counters rather than frozensets;
+    # one shared dict would hand whichever ranker ran second the wrong type. Threaded
+    # through from the caller for the same reason `token_cache` is -- most files are
+    # byte-identical across the ~350 shas scored, and the cache is what makes that cheap.
+    count_cache: dict[str, Counter[str]] | None = None,
+    tf_k1: float | None = None,
 ) -> list[RepoResult]:
     """Run the shuffle floor and both free baselines on one repo.
 
@@ -139,6 +145,11 @@ def evaluate_split(
     # their row order across runs with and without a model -- a table that reorders
     # itself is a table two runs cannot be diffed by eye.
     scored_names = ["path", "lexical", "lexical-ablated"]
+    # Appended after the established free baselines and before the dense arms, so adding
+    # it does not reorder any row that already exists in a committed results file.
+    tf_name = f"lexical-tf(k1={tf_k1:g})" if tf_k1 is not None else None
+    if tf_name is not None:
+        scored_names += [tf_name, f"{tf_name}-ablated"]
     if dense is not None:
         scored_names += ["dense", "dense-ablated"]
     names = ["shuffle (floor)", *scored_names]
@@ -153,6 +164,7 @@ def evaluate_split(
         seed: ([], []) for seed in range(null_trials)
     }
     cache = token_cache if token_cache is not None else {}
+    counts = count_cache if count_cache is not None else {}
 
     for sha, sha_queries in by_sha.items():
         pool = split.pools[sha]
@@ -174,6 +186,20 @@ def evaluate_split(
                 {"lexical-ablated": lexical}, sha_queries, pool, doc_texts, ks, ablate=True
             )
         )
+        if tf_name is not None:
+            # Same tree, same pool, same queries as `lexical` above -- the only difference
+            # between the two rows is the term-frequency factor, which is what makes the
+            # gap between them attributable to it.
+            lexical_tf = LexicalTF(code_texts, counts, k1=tf_k1)
+            scored.update(
+                score_queries({tf_name: lexical_tf}, sha_queries, pool, doc_texts, ks)
+            )
+            scored.update(
+                score_queries(
+                    {f"{tf_name}-ablated": lexical_tf},
+                    sha_queries, pool, doc_texts, ks, ablate=True,
+                )
+            )
         if dense is not None:
             # Built per tree, because the chunk matrix belongs to a tree -- but the
             # embedding cache behind it is shared across every tree and every repo,
@@ -253,7 +279,12 @@ def format_results(
     trials" would understate the noise range by a factor the reader cannot see, and
     the noise range is the thing that decides whether any gap in the table is readable.
     """
-    header = f"{'repo':<20}{'ranker':<17}{'pool~':>6}{'n':>5}"
+    # Widened to fit the longest ranker name, floored at the 17 the fixed-width version
+    # used. `lexical-tf(k1=1.2)-ablated` is 26 characters and carries its k1 because two
+    # settings must not collide under one row; a name overflowing its column shifts every
+    # number to the right of it on that line only, which reads as a different table.
+    ranker_width = max(17, *(len(result.ranker) + 2 for result in results))
+    header = f"{'repo':<20}{'ranker':<{ranker_width}}{'pool~':>6}{'n':>5}"
     for k in ks:
         header += f"{'R@' + str(k):>7}"
     header += f"{'MRR':>7}"
@@ -261,7 +292,7 @@ def format_results(
 
     for result in results:
         row = (
-            f"{result.repo:<20}{result.ranker:<17}"
+            f"{result.repo:<20}{result.ranker:<{ranker_width}}"
             f"{result.pool_median:>6}{result.queries:>5}"
         )
         for k in ks:
@@ -269,7 +300,7 @@ def format_results(
         row += f"{result.mrr:>7.2f}"
         lines.append(row)
         if result.recall_spread is not None:
-            spread = f"{'':<20}{'  noise range':<17}{'':>6}{'':>5}"
+            spread = f"{'':<20}{'  noise range':<{ranker_width}}{'':>6}{'':>5}"
             for k in ks:
                 low, high = result.recall_spread[k]
                 spread += f" {low:.2f}-{high:.2f}"

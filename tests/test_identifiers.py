@@ -142,3 +142,43 @@ def test_shared_finds_version_overlap_between_doc_and_packaging_metadata() -> No
     """
     assert ids.shared("Supports Python 3.8+.", 'python_requires=">=3.8"') == ["ver:3.8"]
     assert ids.shared("Supports Python 3.8+.", 'python_requires=">=3.8"', versions=False) == []
+
+
+def test_extract_counts_agrees_with_extract_on_which_tokens_exist() -> None:
+    """The two functions share `_TOKEN_RE`, `_normalise` and `_VERSION_RE` but not a
+    body, because `extract` mined `data/labels.jsonl` and that label set cannot be
+    replayed. This is what keeps the duplication from becoming a divergence -- and it
+    runs over real source text rather than a fixture, because the shapes that break a
+    tokeniser (dotted paths, camelCase, version literals, `__dunder__`) are exactly
+    what a hand-written sample leaves out.
+    """
+    from pathlib import Path
+
+    for path in sorted(Path("src/driftwood").rglob("*.py")):
+        text = path.read_text(encoding="utf-8")
+        assert set(ids.extract_counts(text)) == ids.extract(text), path
+        assert set(ids.extract_counts(text, versions=False)) == ids.extract(
+            text, versions=False
+        ), path
+
+
+def test_one_mention_counts_once_however_many_pieces_it_splits_into() -> None:
+    """`_normalise` yields the raw identifier, its camel pieces and its underscore
+    pieces from a SINGLE match, so counting the yield directly inflates a count -- and
+    inflates it unevenly, by identifier shape rather than by frequency.
+
+    `retries` has no internal boundary, so it arrives three times from one occurrence.
+    `max_retries` yields `max_retries`, `max` and `retries`. Without the per-match
+    `set()`, one mention of `retries` would outweigh one mention of `max_retries` on
+    the token they share, which is backwards.
+    """
+    assert ids.extract_counts("retries") == {"retries": 1}
+    assert ids.extract_counts("maxRetries") == {"maxretries": 1, "retries": 1}
+    assert ids.extract_counts("max_retries") == {"max_retries": 1, "retries": 1}
+    assert ids.extract_counts("retries retries retries")["retries"] == 3
+
+
+def test_version_literals_are_counted_and_not_merely_present() -> None:
+    counts = ids.extract_counts("Needs 3.8. Tested on 3.8 and 3.12.")
+    assert counts["ver:3.8"] == 2
+    assert counts["ver:3.12"] == 1

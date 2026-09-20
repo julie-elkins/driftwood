@@ -10,12 +10,14 @@ stoplist below matters more than the regex does.
 from __future__ import annotations
 
 import re
+from collections import Counter
 from collections.abc import Iterable
 
 __all__ = [
     "MIN_TOKEN_LENGTH",
     "delta",
     "extract",
+    "extract_counts",
     "extract_numbers",
     "extract_versions",
     "literal_spans",
@@ -263,6 +265,42 @@ def extract(text: str, *, versions: bool = True, stopwords: bool = True) -> set[
     if versions:
         tokens |= extract_versions(text)
     return tokens
+
+
+def extract_counts(
+    text: str, *, versions: bool = True, stopwords: bool = True
+) -> Counter[str]:
+    """`extract`, but counting occurrences instead of collapsing them to a set.
+
+    Added for the term-frequency ranker, which needs to know that a file mentions
+    `HTTPTransport` eleven times rather than merely that it mentions it. Deliberately a
+    second function over the same two primitives rather than a rewrite of `extract`:
+    `extract` is what mined `data/labels.jsonl`, the one label set here that cannot be
+    replayed, so changing its implementation to add a feature nothing in the miner wants
+    risks a silent shift in the corpus every downstream number is measured against.
+    `set(extract_counts(t)) == extract(t)` is asserted over real corpus text, which is
+    what keeps the two from drifting apart.
+
+    **One OCCURRENCE contributes 1 to each distinct token it yields, and that dedupe is
+    the whole subtlety.** `_normalise` yields the raw identifier, its camel-case pieces
+    and its underscore pieces from a single match, and for a token with no internal
+    boundaries those are the same string three times over -- `retries` arrives as
+    `["retries", "retries", "retries"]`. Counting the yield directly would score one
+    mention as three, and would do it unevenly: `maxRetries` yields `maxretries` once but
+    `max` and `retries` twice each, so the inflation would depend on an identifier's
+    shape rather than on how often it appears. `set()` per match is what makes the count
+    mean occurrences.
+    """
+    counts: Counter[str] = Counter()
+    for match in _TOKEN_RE.finditer(text):
+        counts.update(set(_normalise(match.group(0), stopwords=stopwords)))
+    if versions:
+        # Counted the same way, from the same regex `extract_versions` uses. Each match
+        # is one distinct token, so there is nothing to dedupe within a match here.
+        counts.update(
+            f"ver:{match.group('version')}" for match in _VERSION_RE.finditer(text)
+        )
+    return counts
 
 
 def extract_versions(text: str) -> set[str]:
