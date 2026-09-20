@@ -1376,16 +1376,27 @@ correctly. A measurement demanded that stage; it was not drawn on a diagram firs
 uv sync
 uv run driftwood mine --repos psf/requests pallets/flask --limit 4000 --out data/mine.jsonl
 uv run driftwood stats --labels data/mine.jsonl
-uv run driftwood sample --labels data/mine.jsonl --shape A -n 25 --out review/batch.md
-uv run driftwood score review/batch.md --labels data/mine.jsonl
+uv run driftwood sample --labels data/mine.jsonl --shape A -n 25 --out review/shape-A-batch-99.md
+uv run driftwood score review/shape-A-batch-99.md --labels data/mine.jsonl
 uv run driftwood retrieve-eval data/mine.jsonl --out data/scores/retrieval.json
 uv run pytest
 ```
 
-Note the explicit `--out`. `mine` refuses to overwrite an existing file without `--force`,
-because the flag's default points at `data/labels.jsonl` — the one label set here that
-predates manifests and cannot be regenerated. An earlier version of the example above
-omitted `--out`, and duly destroyed it. Recovered from git; the guard is the actual fix.
+Note the explicit `--out`, and the deliberately silly `-99` on the sheet name. `mine` refuses
+to overwrite an existing file without `--force`, because the flag's default points at
+`data/labels.jsonl` — the one label set here that predates manifests and cannot be
+regenerated. An earlier version of the example above omitted `--out`, and duly destroyed it.
+Recovered from git; the guard is the actual fix.
+
+`sample` now refuses on the same terms, and that hole was found by looking for the same
+class rather than by hitting it again. It is the worse of the two: `mine` writes derived
+data, whereas a filled review sheet is hand labels and nothing regenerates a judgement.
+The example above used to name `review/batch.md`, which is a **real filled sheet** — so
+following the README as printed destroyed 25 verdicts, and at the time that file was
+untracked, so there would have been no git copy to recover from. A test now asserts that
+no usage example in this file names any sheet that actually exists under `review/`, because
+the guard makes the command safe and an example pointing at live data still invites a
+`--force`.
 
 `sample` writes a review sheet a human fills in; `score` reads the verdicts back and reports
 precision per shape and per basis with intervals. `retention` checks how a rebuilt label set
