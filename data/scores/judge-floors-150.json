@@ -1,0 +1,919 @@
+{
+  "arms": {
+    "oracle": {
+      "judges": {
+        "always-false": {
+          "abstained": 0,
+          "abstention_calibration": {
+            "abstained_on_held_out": 0,
+            "held_out": 0,
+            "held_out_rate": 0.0,
+            "lift": 0.0,
+            "scoreable_rate": 0.0
+          },
+          "accuracy_all": 0.24285714285714285,
+          "accuracy_answered": 0.24285714285714285,
+          "by_repo": {
+            "encode/httpx": {
+              "f1": 0.6666666666666666,
+              "n": 2,
+              "readable": false
+            },
+            "fastapi/fastapi": {
+              "f1": 0.0,
+              "n": 1,
+              "readable": false
+            },
+            "pallets/flask": {
+              "f1": 0.3720930232558139,
+              "n": 35,
+              "readable": true
+            },
+            "psf/requests": {
+              "f1": 0.4,
+              "n": 24,
+              "readable": true
+            },
+            "pydantic/pydantic": {
+              "f1": 0.4,
+              "n": 8,
+              "readable": false
+            }
+          },
+          "by_shape": {
+            "A": {
+              "f1": 0.3908045977011494,
+              "n": 70,
+              "readable": true
+            },
+            "B": {
+              "f1": 0.0,
+              "n": 0,
+              "readable": false
+            }
+          },
+          "by_verdict": {
+            "cosmetic": {
+              "false": 31
+            },
+            "drift": {
+              "false": 17
+            },
+            "new": {
+              "false": 17
+            },
+            "unrelated": {
+              "false": 5
+            }
+          },
+          "confusion": {
+            "fn": 0,
+            "fp": 53,
+            "tn": 0,
+            "tp": 17
+          },
+          "f1": 0.3908045977011494,
+          "n": 70,
+          "precision": 0.24285714285714285,
+          "recall": 1.0,
+          "truncated": 0,
+          "truncated_answered": 0,
+          "unparsed": 0,
+          "unparsed_only": 0
+        },
+        "always-not-false": {
+          "abstained": 0,
+          "abstention_calibration": {
+            "abstained_on_held_out": 0,
+            "held_out": 0,
+            "held_out_rate": 0.0,
+            "lift": 0.0,
+            "scoreable_rate": 0.0
+          },
+          "accuracy_all": 0.7571428571428571,
+          "accuracy_answered": 0.7571428571428571,
+          "by_repo": {
+            "encode/httpx": {
+              "f1": 0.0,
+              "n": 2,
+              "readable": false
+            },
+            "fastapi/fastapi": {
+              "f1": 0.0,
+              "n": 1,
+              "readable": false
+            },
+            "pallets/flask": {
+              "f1": 0.0,
+              "n": 35,
+              "readable": true
+            },
+            "psf/requests": {
+              "f1": 0.0,
+              "n": 24,
+              "readable": true
+            },
+            "pydantic/pydantic": {
+              "f1": 0.0,
+              "n": 8,
+              "readable": false
+            }
+          },
+          "by_shape": {
+            "A": {
+              "f1": 0.0,
+              "n": 70,
+              "readable": true
+            },
+            "B": {
+              "f1": 0.0,
+              "n": 0,
+              "readable": false
+            }
+          },
+          "by_verdict": {
+            "cosmetic": {
+              "not-false": 31
+            },
+            "drift": {
+              "not-false": 17
+            },
+            "new": {
+              "not-false": 17
+            },
+            "unrelated": {
+              "not-false": 5
+            }
+          },
+          "confusion": {
+            "fn": 17,
+            "fp": 0,
+            "tn": 53,
+            "tp": 0
+          },
+          "f1": 0.0,
+          "n": 70,
+          "precision": 0.0,
+          "recall": 0.0,
+          "truncated": 0,
+          "truncated_answered": 0,
+          "unparsed": 0,
+          "unparsed_only": 0
+        },
+        "lexical-absence(>=1)": {
+          "abstained": 0,
+          "abstention_calibration": {
+            "abstained_on_held_out": 0,
+            "held_out": 0,
+            "held_out_rate": 0.0,
+            "lift": 0.0,
+            "scoreable_rate": 0.0
+          },
+          "accuracy_all": 0.2857142857142857,
+          "accuracy_answered": 0.2857142857142857,
+          "by_repo": {
+            "encode/httpx": {
+              "f1": 0.6666666666666666,
+              "n": 2,
+              "readable": false
+            },
+            "fastapi/fastapi": {
+              "f1": 0.0,
+              "n": 1,
+              "readable": false
+            },
+            "pallets/flask": {
+              "f1": 0.3902439024390244,
+              "n": 35,
+              "readable": true
+            },
+            "psf/requests": {
+              "f1": 0.4,
+              "n": 24,
+              "readable": true
+            },
+            "pydantic/pydantic": {
+              "f1": 0.4444444444444445,
+              "n": 8,
+              "readable": false
+            }
+          },
+          "by_shape": {
+            "A": {
+              "f1": 0.40476190476190477,
+              "n": 70,
+              "readable": true
+            },
+            "B": {
+              "f1": 0.0,
+              "n": 0,
+              "readable": false
+            }
+          },
+          "by_verdict": {
+            "cosmetic": {
+              "false": 31
+            },
+            "drift": {
+              "false": 17
+            },
+            "new": {
+              "false": 16,
+              "not-false": 1
+            },
+            "unrelated": {
+              "false": 3,
+              "not-false": 2
+            }
+          },
+          "confusion": {
+            "fn": 0,
+            "fp": 50,
+            "tn": 3,
+            "tp": 17
+          },
+          "f1": 0.40476190476190477,
+          "n": 70,
+          "precision": 0.2537313432835821,
+          "recall": 1.0,
+          "truncated": 0,
+          "truncated_answered": 0,
+          "unparsed": 0,
+          "unparsed_only": 0
+        },
+        "lexical-absence(>=3)": {
+          "abstained": 0,
+          "abstention_calibration": {
+            "abstained_on_held_out": 0,
+            "held_out": 0,
+            "held_out_rate": 0.0,
+            "lift": 0.0,
+            "scoreable_rate": 0.0
+          },
+          "accuracy_all": 0.3142857142857143,
+          "accuracy_answered": 0.3142857142857143,
+          "by_repo": {
+            "encode/httpx": {
+              "f1": 0.6666666666666666,
+              "n": 2,
+              "readable": false
+            },
+            "fastapi/fastapi": {
+              "f1": 0.0,
+              "n": 1,
+              "readable": false
+            },
+            "pallets/flask": {
+              "f1": 0.4,
+              "n": 35,
+              "readable": true
+            },
+            "psf/requests": {
+              "f1": 0.4,
+              "n": 24,
+              "readable": true
+            },
+            "pydantic/pydantic": {
+              "f1": 0.5,
+              "n": 8,
+              "readable": false
+            }
+          },
+          "by_shape": {
+            "A": {
+              "f1": 0.41463414634146345,
+              "n": 70,
+              "readable": true
+            },
+            "B": {
+              "f1": 0.0,
+              "n": 0,
+              "readable": false
+            }
+          },
+          "by_verdict": {
+            "cosmetic": {
+              "false": 29,
+              "not-false": 2
+            },
+            "drift": {
+              "false": 17
+            },
+            "new": {
+              "false": 16,
+              "not-false": 1
+            },
+            "unrelated": {
+              "false": 3,
+              "not-false": 2
+            }
+          },
+          "confusion": {
+            "fn": 0,
+            "fp": 48,
+            "tn": 5,
+            "tp": 17
+          },
+          "f1": 0.41463414634146345,
+          "n": 70,
+          "precision": 0.26153846153846155,
+          "recall": 1.0,
+          "truncated": 0,
+          "truncated_answered": 0,
+          "unparsed": 0,
+          "unparsed_only": 0
+        },
+        "lexical-absence(>=6)": {
+          "abstained": 0,
+          "abstention_calibration": {
+            "abstained_on_held_out": 0,
+            "held_out": 0,
+            "held_out_rate": 0.0,
+            "lift": 0.0,
+            "scoreable_rate": 0.0
+          },
+          "accuracy_all": 0.35714285714285715,
+          "accuracy_answered": 0.35714285714285715,
+          "by_repo": {
+            "encode/httpx": {
+              "f1": 0.6666666666666666,
+              "n": 2,
+              "readable": false
+            },
+            "fastapi/fastapi": {
+              "f1": 0.0,
+              "n": 1,
+              "readable": false
+            },
+            "pallets/flask": {
+              "f1": 0.41025641025641024,
+              "n": 35,
+              "readable": true
+            },
+            "psf/requests": {
+              "f1": 0.42857142857142855,
+              "n": 24,
+              "readable": true
+            },
+            "pydantic/pydantic": {
+              "f1": 0.5,
+              "n": 8,
+              "readable": false
+            }
+          },
+          "by_shape": {
+            "A": {
+              "f1": 0.430379746835443,
+              "n": 70,
+              "readable": true
+            },
+            "B": {
+              "f1": 0.0,
+              "n": 0,
+              "readable": false
+            }
+          },
+          "by_verdict": {
+            "cosmetic": {
+              "false": 27,
+              "not-false": 4
+            },
+            "drift": {
+              "false": 17
+            },
+            "new": {
+              "false": 16,
+              "not-false": 1
+            },
+            "unrelated": {
+              "false": 2,
+              "not-false": 3
+            }
+          },
+          "confusion": {
+            "fn": 0,
+            "fp": 45,
+            "tn": 8,
+            "tp": 17
+          },
+          "f1": 0.430379746835443,
+          "n": 70,
+          "precision": 0.27419354838709675,
+          "recall": 1.0,
+          "truncated": 0,
+          "truncated_answered": 0,
+          "unparsed": 0,
+          "unparsed_only": 0
+        }
+      },
+      "noise_range": {
+        "accuracy_all": [
+          0.5571428571428572,
+          0.6285714285714286,
+          0.7142857142857143
+        ],
+        "f1": [
+          0.06451612903225808,
+          0.23529411764705882,
+          0.4117647058823529
+        ],
+        "precision": [
+          0.07142857142857142,
+          0.23809523809523808,
+          0.4117647058823529
+        ]
+      }
+    },
+    "retrieved": {
+      "judges": {
+        "always-false": {
+          "abstained": 0,
+          "abstention_calibration": {
+            "abstained_on_held_out": 0,
+            "held_out": 20,
+            "held_out_rate": 0.0,
+            "lift": 0.0,
+            "scoreable_rate": 0.0
+          },
+          "accuracy_all": 0.26153846153846155,
+          "accuracy_answered": 0.26153846153846155,
+          "by_repo": {
+            "encode/httpx": {
+              "f1": 0.7692307692307693,
+              "n": 8,
+              "readable": false
+            },
+            "fastapi/fastapi": {
+              "f1": 0.2222222222222222,
+              "n": 8,
+              "readable": false
+            },
+            "pallets/flask": {
+              "f1": 0.40625,
+              "n": 51,
+              "readable": true
+            },
+            "psf/requests": {
+              "f1": 0.34375000000000006,
+              "n": 53,
+              "readable": true
+            },
+            "pydantic/pydantic": {
+              "f1": 0.5714285714285715,
+              "n": 10,
+              "readable": true
+            }
+          },
+          "by_shape": {
+            "A": {
+              "f1": 0.3908045977011494,
+              "n": 70,
+              "readable": true
+            },
+            "B": {
+              "f1": 0.4415584415584416,
+              "n": 60,
+              "readable": true
+            }
+          },
+          "by_verdict": {
+            "cosmetic": {
+              "false": 72
+            },
+            "drift": {
+              "false": 34
+            },
+            "new": {
+              "false": 19
+            },
+            "unclear": {
+              "false": 20
+            },
+            "unrelated": {
+              "false": 5
+            }
+          },
+          "confusion": {
+            "fn": 0,
+            "fp": 96,
+            "tn": 0,
+            "tp": 34
+          },
+          "f1": 0.41463414634146345,
+          "n": 130,
+          "precision": 0.26153846153846155,
+          "recall": 1.0,
+          "truncated": 0,
+          "truncated_answered": 0,
+          "unparsed": 0,
+          "unparsed_only": 0
+        },
+        "always-not-false": {
+          "abstained": 0,
+          "abstention_calibration": {
+            "abstained_on_held_out": 0,
+            "held_out": 20,
+            "held_out_rate": 0.0,
+            "lift": 0.0,
+            "scoreable_rate": 0.0
+          },
+          "accuracy_all": 0.7384615384615385,
+          "accuracy_answered": 0.7384615384615385,
+          "by_repo": {
+            "encode/httpx": {
+              "f1": 0.0,
+              "n": 8,
+              "readable": false
+            },
+            "fastapi/fastapi": {
+              "f1": 0.0,
+              "n": 8,
+              "readable": false
+            },
+            "pallets/flask": {
+              "f1": 0.0,
+              "n": 51,
+              "readable": true
+            },
+            "psf/requests": {
+              "f1": 0.0,
+              "n": 53,
+              "readable": true
+            },
+            "pydantic/pydantic": {
+              "f1": 0.0,
+              "n": 10,
+              "readable": true
+            }
+          },
+          "by_shape": {
+            "A": {
+              "f1": 0.0,
+              "n": 70,
+              "readable": true
+            },
+            "B": {
+              "f1": 0.0,
+              "n": 60,
+              "readable": true
+            }
+          },
+          "by_verdict": {
+            "cosmetic": {
+              "not-false": 72
+            },
+            "drift": {
+              "not-false": 34
+            },
+            "new": {
+              "not-false": 19
+            },
+            "unclear": {
+              "not-false": 20
+            },
+            "unrelated": {
+              "not-false": 5
+            }
+          },
+          "confusion": {
+            "fn": 34,
+            "fp": 0,
+            "tn": 96,
+            "tp": 0
+          },
+          "f1": 0.0,
+          "n": 130,
+          "precision": 0.0,
+          "recall": 0.0,
+          "truncated": 0,
+          "truncated_answered": 0,
+          "unparsed": 0,
+          "unparsed_only": 0
+        },
+        "lexical-absence(>=1)": {
+          "abstained": 0,
+          "abstention_calibration": {
+            "abstained_on_held_out": 0,
+            "held_out": 20,
+            "held_out_rate": 0.0,
+            "lift": 0.0,
+            "scoreable_rate": 0.0
+          },
+          "accuracy_all": 0.3153846153846154,
+          "accuracy_answered": 0.3153846153846154,
+          "by_repo": {
+            "encode/httpx": {
+              "f1": 0.7692307692307693,
+              "n": 8,
+              "readable": false
+            },
+            "fastapi/fastapi": {
+              "f1": 0.2222222222222222,
+              "n": 8,
+              "readable": false
+            },
+            "pallets/flask": {
+              "f1": 0.4210526315789473,
+              "n": 51,
+              "readable": true
+            },
+            "psf/requests": {
+              "f1": 0.34375000000000006,
+              "n": 53,
+              "readable": true
+            },
+            "pydantic/pydantic": {
+              "f1": 0.6666666666666666,
+              "n": 10,
+              "readable": true
+            }
+          },
+          "by_shape": {
+            "A": {
+              "f1": 0.41463414634146345,
+              "n": 70,
+              "readable": true
+            },
+            "B": {
+              "f1": 0.4383561643835616,
+              "n": 60,
+              "readable": true
+            }
+          },
+          "by_verdict": {
+            "cosmetic": {
+              "false": 68,
+              "not-false": 4
+            },
+            "drift": {
+              "false": 33,
+              "not-false": 1
+            },
+            "new": {
+              "false": 18,
+              "not-false": 1
+            },
+            "unclear": {
+              "false": 20
+            },
+            "unrelated": {
+              "false": 2,
+              "not-false": 3
+            }
+          },
+          "confusion": {
+            "fn": 1,
+            "fp": 88,
+            "tn": 8,
+            "tp": 33
+          },
+          "f1": 0.42580645161290326,
+          "n": 130,
+          "precision": 0.2727272727272727,
+          "recall": 0.9705882352941176,
+          "truncated": 0,
+          "truncated_answered": 0,
+          "unparsed": 0,
+          "unparsed_only": 0
+        },
+        "lexical-absence(>=3)": {
+          "abstained": 0,
+          "abstention_calibration": {
+            "abstained_on_held_out": 0,
+            "held_out": 20,
+            "held_out_rate": 0.0,
+            "lift": 0.0,
+            "scoreable_rate": 0.0
+          },
+          "accuracy_all": 0.34615384615384615,
+          "accuracy_answered": 0.34615384615384615,
+          "by_repo": {
+            "encode/httpx": {
+              "f1": 0.7692307692307693,
+              "n": 8,
+              "readable": false
+            },
+            "fastapi/fastapi": {
+              "f1": 0.25,
+              "n": 8,
+              "readable": false
+            },
+            "pallets/flask": {
+              "f1": 0.4444444444444444,
+              "n": 51,
+              "readable": true
+            },
+            "psf/requests": {
+              "f1": 0.34375000000000006,
+              "n": 53,
+              "readable": true
+            },
+            "pydantic/pydantic": {
+              "f1": 0.6666666666666666,
+              "n": 10,
+              "readable": true
+            }
+          },
+          "by_shape": {
+            "A": {
+              "f1": 0.425,
+              "n": 70,
+              "readable": true
+            },
+            "B": {
+              "f1": 0.45070422535211263,
+              "n": 60,
+              "readable": true
+            }
+          },
+          "by_verdict": {
+            "cosmetic": {
+              "false": 65,
+              "not-false": 7
+            },
+            "drift": {
+              "false": 33,
+              "not-false": 1
+            },
+            "new": {
+              "false": 17,
+              "not-false": 2
+            },
+            "unclear": {
+              "false": 20
+            },
+            "unrelated": {
+              "false": 2,
+              "not-false": 3
+            }
+          },
+          "confusion": {
+            "fn": 1,
+            "fp": 84,
+            "tn": 12,
+            "tp": 33
+          },
+          "f1": 0.43708609271523174,
+          "n": 130,
+          "precision": 0.28205128205128205,
+          "recall": 0.9705882352941176,
+          "truncated": 0,
+          "truncated_answered": 0,
+          "unparsed": 0,
+          "unparsed_only": 0
+        },
+        "lexical-absence(>=6)": {
+          "abstained": 0,
+          "abstention_calibration": {
+            "abstained_on_held_out": 0,
+            "held_out": 20,
+            "held_out_rate": 0.0,
+            "lift": 0.0,
+            "scoreable_rate": 0.0
+          },
+          "accuracy_all": 0.4,
+          "accuracy_answered": 0.4,
+          "by_repo": {
+            "encode/httpx": {
+              "f1": 0.5454545454545454,
+              "n": 8,
+              "readable": false
+            },
+            "fastapi/fastapi": {
+              "f1": 0.25,
+              "n": 8,
+              "readable": false
+            },
+            "pallets/flask": {
+              "f1": 0.34782608695652173,
+              "n": 51,
+              "readable": true
+            },
+            "psf/requests": {
+              "f1": 0.33962264150943394,
+              "n": 53,
+              "readable": true
+            },
+            "pydantic/pydantic": {
+              "f1": 0.8,
+              "n": 10,
+              "readable": true
+            }
+          },
+          "by_shape": {
+            "A": {
+              "f1": 0.4126984126984127,
+              "n": 70,
+              "readable": true
+            },
+            "B": {
+              "f1": 0.36923076923076925,
+              "n": 60,
+              "readable": true
+            }
+          },
+          "by_verdict": {
+            "cosmetic": {
+              "false": 54,
+              "not-false": 18
+            },
+            "drift": {
+              "false": 25,
+              "not-false": 9
+            },
+            "new": {
+              "false": 13,
+              "not-false": 6
+            },
+            "unclear": {
+              "false": 15,
+              "not-false": 5
+            },
+            "unrelated": {
+              "false": 2,
+              "not-false": 3
+            }
+          },
+          "confusion": {
+            "fn": 9,
+            "fp": 69,
+            "tn": 27,
+            "tp": 25
+          },
+          "f1": 0.390625,
+          "n": 130,
+          "precision": 0.26595744680851063,
+          "recall": 0.7352941176470589,
+          "truncated": 0,
+          "truncated_answered": 0,
+          "unparsed": 0,
+          "unparsed_only": 0
+        }
+      },
+      "noise_range": {
+        "accuracy_all": [
+          0.5615384615384615,
+          0.6076923076923076,
+          0.676923076923077
+        ],
+        "f1": [
+          0.16129032258064516,
+          0.25,
+          0.36363636363636365
+        ],
+        "precision": [
+          0.16666666666666666,
+          0.25,
+          0.35294117647058826
+        ]
+      }
+    }
+  },
+  "generated_at": "2026-09-20T14:18:01+00:00",
+  "provenance": {
+    "arms": [
+      "oracle",
+      "retrieved"
+    ],
+    "balance": {
+      "held_out_unclear": 0,
+      "majority_accuracy": 0.7384615384615385,
+      "majority_class": "not-false",
+      "negative": 96,
+      "positive": 34,
+      "positive_rate": 0.26153846153846155,
+      "scoreable": 130
+    },
+    "claim_batch": null,
+    "code_budget": 6000,
+    "corpus": {
+      "cases": 150,
+      "from_frozen": 150,
+      "from_ignored_versions": 0,
+      "held_out_unclear": 20,
+      "scoreable": 130,
+      "sheets": 7,
+      "verdicts": 150,
+      "with_code_path": 70
+    },
+    "doc_budget": 12000,
+    "effort": null,
+    "judges": [
+      "always-false",
+      "always-not-false",
+      "lexical-absence(>=1)",
+      "lexical-absence(>=3)",
+      "lexical-absence(>=6)"
+    ],
+    "k": 5,
+    "limit": 0,
+    "majority_class_floor_accuracy": 0.7384615384615385,
+    "max_tokens": 6000,
+    "min_readable_cell": 10,
+    "null_trials": 200,
+    "only_cases": null,
+    "primary_metric": "f1_positive_class",
+    "repos": "all",
+    "retry_max_tokens": null
+  }
+}

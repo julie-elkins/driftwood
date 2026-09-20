@@ -93,14 +93,20 @@ class TestTheConstantFloors:
             pytest.skip("mined labels not present")
         cases, _ = load_cases(REPO_ROOT / "review", data)
 
+        # Both floors MOVED when `review/batch.md` was labelled, and the always-drift one
+        # is the one that matters: F1 0.444 -> 0.415 on 130 scoreable instead of 105. Every
+        # stage-3 F1 in the README was quoted against 0.444. A judge that scored 0.43 was
+        # below the old floor and is above the new one, so this is not bookkeeping -- the
+        # scores in `data/scores/judge-*.json` were measured on the 105-case corpus and are
+        # not comparable to anything run from here on without re-scoring.
         low = score(cases, _judgements(AlwaysJudge(False), cases))
-        assert low.n == 105
-        assert low.accuracy_all == pytest.approx(0.714, abs=0.001)
+        assert low.n == 130
+        assert low.accuracy_all == pytest.approx(0.738, abs=0.001)
         assert low.f1 == 0.0
 
         high = score(cases, _judgements(AlwaysJudge(True), cases))
-        assert high.accuracy_all == pytest.approx(0.286, abs=0.001)
-        assert high.f1 == pytest.approx(0.444, abs=0.001)
+        assert high.accuracy_all == pytest.approx(0.262, abs=0.001)
+        assert high.f1 == pytest.approx(0.415, abs=0.001)
 
     def test_a_held_out_case_is_never_scored(self):
         cases = [_case("u1", "unclear"), _case("p1", "drift")]
@@ -266,7 +272,7 @@ class TestReadingAModelsReply:
 
     def test_a_verdict_outside_the_vocabulary_abstains_loudly(self):
         # "probably-false" becoming "not-false" would be the worst available default:
-        # it would earn credit on 75 of 105 cases for free.
+        # it would earn credit on 96 of 130 cases for free.
         answer, _, _, reason, unparsed = _parse('{"verdict": "probably-false"}')
         assert answer is None and unparsed
         assert "probably-false" in reason

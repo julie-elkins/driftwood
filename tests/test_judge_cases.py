@@ -91,7 +91,7 @@ class TestTheProspectiveTargetMapping:
         # The legend's wording invites the opposite reading. Both sampled cases are
         # "Added support for X" -- feature and docs in one commit -- so at the
         # parent neither existed and nothing was false. Flipping this would
-        # mislabel 10 of 105 cases and penalise a judge for being right.
+        # mislabel 19 of 130 cases and penalise a judge for being right.
         assert FALSE_AT_PARENT["new"] is False
 
     def test_only_drift_is_positive(self):
@@ -325,12 +325,12 @@ class TestTheCorpusIsSelfContained:
 
         cases, tally = load_cases(REPO_ROOT / "review", lonely)
 
-        assert tally["verdicts"] == 125
-        assert tally["cases"] == 125, (
+        assert tally["verdicts"] == 150
+        assert tally["cases"] == 150, (
             "a checkout with only the tracked files must rebuild the whole corpus"
         )
         assert tally.get("unresolvable", 0) == 0
-        assert class_balance(cases)["scoreable"] == 105
+        assert class_balance(cases)["scoreable"] == 130
 
     def test_the_frozen_file_is_the_preferred_source_everywhere(self, real):
         # So `resolved_from` is identical on a machine holding every mined version and
@@ -367,7 +367,7 @@ class TestTheCorpusIsSelfContained:
 
         written, unresolvable = freeze_records(REPO_ROOT / "review", data, out)
 
-        assert (written, unresolvable) == (125, 0)
+        assert (written, unresolvable) == (150, 0)
         assert out.read_text(encoding="utf-8") == source.read_text(encoding="utf-8")
 
     def test_a_verdict_resolving_nowhere_is_reported_as_a_failure(self, tmp_path):
@@ -386,25 +386,54 @@ class TestTheCorpusIsSelfContained:
 
 
 class TestAgainstTheRealCorpus:
-    """Pins the pre-registered numbers, so a corpus change cannot pass unnoticed."""
+    """Pins the corpus, so a change to it cannot pass unnoticed.
+
+    These fired as seven failures the moment `review/batch.md` was filled in, which is
+    the control working: the sheets are globbed, so the corpus grows whenever one is
+    labelled, and every stage-3 number is measured against a denominator that just
+    moved. Updating the literal is the *last* step of absorbing a new batch, not the
+    first -- `driftwood judge-freeze` comes before it, or a clean checkout rebuilds the
+    old corpus and these keep passing while the real one has grown.
+
+    **Only the 125-case numbers were pre-registered.** `review/batch.md` added 25 shape-A
+    cases with no prediction recorded beforehand, so the 150/130 literals below are a pin
+    on an observed corpus and not a prediction that survived. Noted here rather than
+    smoothed over, because the class used to say "pre-registered" about all of it.
+    """
 
     def test_every_verdict_resolves_to_a_record(self, real):
         _, tally = real
-        assert tally["verdicts"] == 125
-        assert tally["cases"] == 125
+        assert tally["verdicts"] == 150
+        assert tally["cases"] == 150
         assert tally.get("unresolvable", 0) == 0
 
     def test_no_case_differs_between_the_versions_holding_it(self, real):
         _, tally = real
         assert tally.get("version_disagreements", 0) == 0
 
-    def test_the_preregistered_balance_holds(self, real):
+    def test_the_class_balance_holds(self, real):
+        # Batch 01's 30/75 WAS pre-registered and held. The 25 cases in `review/batch.md`
+        # were not predicted, and they came in at 4 positive / 21 negative -- 16% against
+        # the established 28.6%. That gap is not readable at n=25 (1.4 sd on a binomial
+        # at p=0.286), so it is recorded, not interpreted.
         cases, _ = real
         balance = class_balance(cases)
-        assert balance["scoreable"] == 105
-        assert balance["positive"] == 30
-        assert balance["negative"] == 75
-        assert balance["majority_accuracy"] == pytest.approx(0.714, abs=0.001)
+        assert balance["scoreable"] == 130
+        assert balance["positive"] == 34
+        assert balance["negative"] == 96
+        assert balance["majority_accuracy"] == pytest.approx(0.738, abs=0.001)
+
+    def test_the_new_batch_held_out_nothing_and_that_has_a_mechanism(self, real):
+        # Batch 01 held out 20 of 125 as `unclear` (16%); `review/batch.md` held out 0 of
+        # 25. Under a binomial at p=0.16 that is p≈0.013, which would be suspicious if it
+        # had no mechanism -- and it has one: all 25 are shape A, so the reviewer had a
+        # code file to read. Shape B is doc-only and every `unclear` in the corpus comes
+        # from a shape-B sheet. Asserted so that a future all-shape-A batch producing
+        # `unclear` cases is a finding rather than a shrug.
+        cases, _ = real
+        unclear = [c for c in cases if c.verdict == "unclear"]
+        assert len(unclear) == 20
+        assert all(c.code_path is None for c in unclear)
 
     def test_shape_b_has_no_code_side_at_all(self, real):
         # The reason retrieval is load-bearing in stage 3 rather than optional.
@@ -415,6 +444,6 @@ class TestAgainstTheRealCorpus:
     def test_the_report_states_the_floor_and_the_holdout(self, real):
         cases, tally = real
         report = format_case_report(cases, tally)
-        assert "71.4% accuracy" in report
+        assert "73.8% accuracy" in report
         assert "F1 0.00" in report
         assert "held out 20" in report

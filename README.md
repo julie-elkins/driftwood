@@ -993,8 +993,9 @@ At a 28.6% positive rate, answering "not false" every single time scores **71.4%
 accuracy in the sixties or seventies is consistent with a judge that has learned nothing. So the
 primary metric is F1 on the positive class — where that same constant scores 0.00.
 
-But F1 has its own floor, and it is not zero. Answering "drift" every time scores **F1 0.44**.
-Both constants are reported on every table, because they catch opposite failures.
+But F1 has its own floor, and it is not zero. Answering "drift" every time scores **F1 0.44** on
+the corpus this table reports. Both constants are reported on every table, because they catch
+opposite failures — and because, as the next subsection shows, they move when the corpus does.
 
 Retrieved arm, k=5, 105 scoreable cases:
 
@@ -1019,6 +1020,56 @@ Two claims this pre-empts, both of which I would otherwise have been able to mak
 - "Our judge beats a non-LLM baseline." The non-LLM baseline is not a baseline.
 - "Our judge scores F1 0.40." That is worse than a stuck switch, and against the accuracy floor
   alone it would have read as a respectable result.
+
+### A floor is not a constant of nature — 25 more labels moved both of them
+
+The corpus grew from 125 verdicts to 150 on 2026-09-20: a shape-A batch of 25, all of them
+scoreable, none held out. Scoreable went 105 → 130 and every floor above moved with it.
+
+| | 105 scoreable | 130 scoreable |
+|---|---|---|
+| positive rate | 28.6% | 26.2% |
+| `always-not-false` accuracy — the majority floor | 71.4% | **73.8%** |
+| `always-false` F1 — the F1 floor | 0.444 | **0.415** |
+| chance F1, 200 trials, p5–p95 | 0.18–0.39 | **0.16–0.36** |
+| best free judge | `lexical-absence(>=3)` 0.45 | `lexical-absence(>=3)` **0.44** |
+
+**This is why the floors are asserted as literals in the tests rather than recomputed from the
+corpus.** Seven assertions failed the moment the sheet was filled in, which is the control working:
+a floor derived from whatever the corpus currently is cannot detect the corpus changing, and the
+corpus changes whenever anybody labels a sheet — `review/*.md` is globbed, so growth is the normal
+case rather than the exception. A dynamic floor would have absorbed the move in silence and every
+stage-3 comparison after it would have been against a moving target.
+
+Two consequences worth stating plainly rather than leaving for a reader to work out.
+
+**Every stage-3 result below was measured on the 105-case corpus, against the 0.444 floor, and is
+not comparable to anything scored from here on.** The score files say so themselves —
+`provenance.corpus.cases` is `125` in each — which is the reason that field exists. The free arms
+have been re-scored (`data/scores/judge-floors-150.json`); the model arms have not, and re-scoring
+them is not free, though it is cheap: judgements cache by content, so the 105 old cases cost
+nothing and only the 25 new ones are billed, roughly a fifth of the original arm.
+
+**The margin on the claim this section exists to block got narrower, and it still holds.** "A judge
+at F1 0.40 is worse than a stuck switch" was true by 0.044 and is now true by 0.015. One more batch
+of labels in the same direction would make it false — not because the judge improved, but because
+the floor came down to meet it. That is the failure mode this whole section is built to catch, and
+it is now 0.015 away, so the sentence needs re-checking after every batch rather than quoting.
+
+No prediction was registered for these 25 before they were labelled, which breaks the rule this
+project applies everywhere else. It is recorded here rather than papered over: the 150/130 numbers
+are a pin on an observed corpus, not a prediction that survived contact. What *can* be said
+retrospectively is that batch 01's pre-registered 30/75 held — the new batch came in at 4 positive
+and 21 negative, 16% against the established 28.6%, which is 1.4 standard deviations on a binomial
+at n=25 and therefore not a readable difference.
+
+One observation from the new batch that does have a mechanism: it held out **zero** cases as
+`unclear`, where batch 01 held out 20 of 125. At a 16% rate that is p≈0.013, which would be
+suspicious on its own — and the explanation is structural rather than statistical. All 25 are shape
+A, so the reviewer had a code file in front of her. Every `unclear` in the whole corpus comes from a
+shape-B sheet, where the commit touched documentation only and there is no code side to read. A
+test now asserts that, so a future all-shape-A batch producing `unclear` cases is a finding rather
+than a shrug.
 
 ### The retrieval ceiling, measured rather than assumed
 
