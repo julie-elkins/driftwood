@@ -63,6 +63,14 @@ secrets.*
 # outward-facing, and this one reappears on its own every time the project is opened.
 .idea/
 
+# macOS directory metadata. Finder writes these on its own, into any directory it is
+# pointed at, which makes them the one kind of junk that arrives without anybody running
+# anything. Ignored against habit rather than against data -- unlike every entry above,
+# nothing here is derived from something and nothing regenerates it on purpose. Listed
+# because this repository is public and an untracked file is one careless `git add` from
+# being outward-facing, which is the same reason `.claude/` and `.idea/` are here.
+.DS_Store
+
 # Never ignored, and worth saying why:
 #   review/*.md              -- the hand labels. Irreplaceable; every number
 #                               downstream is measured against them.
