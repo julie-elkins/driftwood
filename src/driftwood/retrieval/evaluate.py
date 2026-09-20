@@ -389,6 +389,7 @@ def to_json(
     results: list[RepoResult],
     splits: list[RepoSplit],
     provenance: dict | None = None,
+    null_trials: int = NULL_TRIALS,
 ) -> dict:
     """Results as data, so a later run is diffable against this one.
 
@@ -399,11 +400,21 @@ def to_json(
     without them is uncheckable: two runs at different chunk sizes produce different
     numbers from identical code and identical labels, and nothing in the table says
     which is which.
+
+    `null_trials` is a parameter for exactly the reason it is one on `format_results`,
+    and this is the third place that defect has been found: the field used to be the
+    module constant, so a `--null-trials 8` run wrote "40" into a results file whose
+    noise ranges were eight trials wide. The footer lied for one run and was fixed;
+    this lied permanently, in the artefact the footer's fix exists to make diffable.
+    The `k` values are recorded for the same reason -- they are configurable now, and a
+    `recall_at` map is uninterpretable without knowing which ks the run was asked for.
     """
+    ks = sorted({int(k) for result in results for k in result.recall_at})
     return {
         "eval": "retrieval-doc-to-code",
         "scored_at": "each query's own at_sha",
-        "null_trials": NULL_TRIALS,
+        "null_trials": null_trials,
+        "ks": ks,
         "ranker_provenance": provenance or {"dense": "not run -- free baselines only"},
         "dataset": [
             {

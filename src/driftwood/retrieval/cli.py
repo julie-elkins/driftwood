@@ -105,6 +105,7 @@ def _run(args: argparse.Namespace) -> int:
         results.extend(
             evaluate.evaluate_split(
                 split,
+                ks=tuple(args.ks),
                 null_trials=args.null_trials,
                 token_cache=token_cache,
                 dense=dense_factory,
@@ -118,7 +119,11 @@ def _run(args: argparse.Namespace) -> int:
         if embed_cache is not None:
             embed_cache.save()
 
-    print(evaluate.format_results(results, null_trials=args.null_trials))
+    print(
+        evaluate.format_results(
+            results, ks=tuple(args.ks), null_trials=args.null_trials
+        )
+    )
     if embed_cache is not None:
         total = embed_cache.hits + embed_cache.misses
         print(
@@ -127,7 +132,9 @@ def _run(args: argparse.Namespace) -> int:
         )
 
     if args.out:
-        payload = evaluate.to_json(results, splits, provenance)
+        payload = evaluate.to_json(
+            results, splits, provenance, null_trials=args.null_trials
+        )
         payload["labels"] = str(args.labels)
         args.out.parent.mkdir(parents=True, exist_ok=True)
         args.out.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
@@ -217,6 +224,7 @@ def _run_doc_eval(args: argparse.Namespace) -> int:
         results.extend(
             evaluate.evaluate_split(
                 split,
+                ks=tuple(args.ks),
                 null_trials=args.null_trials,
                 token_cache=token_cache,
                 dense=dense_factory,
@@ -233,7 +241,9 @@ def _run_doc_eval(args: argparse.Namespace) -> int:
     # their unablated ones, and a duplicated row in a results table reads as a
     # measurement that was made.
     kept = [r for r in results if not r.ranker.endswith("-ablated")]
-    print(evaluate.format_results(kept, null_trials=args.null_trials))
+    print(
+        evaluate.format_results(kept, ks=tuple(args.ks), null_trials=args.null_trials)
+    )
     print()
     print("No ablated arm, and its absence is the point. Ablation bounds circularity")
     print("injected by the MINING RULE: it strikes the tokens that caused a pair to be")
@@ -242,7 +252,9 @@ def _run_doc_eval(args: argparse.Namespace) -> int:
     print("rows of the mined eval -- those are that corpus's defensible numbers.")
 
     if args.out:
-        payload = evaluate.to_json(kept, splits, provenance)
+        payload = evaluate.to_json(
+            kept, splits, provenance, null_trials=args.null_trials
+        )
         payload["eval"] = "retrieval-doc-to-code-human-labelled"
         payload["ground_truth"] = {
             "source": str(args.sheet),
@@ -260,6 +272,21 @@ def _run_doc_eval(args: argparse.Namespace) -> int:
         args.out.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
         print(f"\nwrote {args.out}")
     return 0
+
+
+def _add_ks_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--ks",
+        type=int,
+        nargs="+",
+        default=list(evaluate.DEFAULT_KS),
+        metavar="K",
+        help=f"cutoffs for recall@k (default: {' '.join(map(str, evaluate.DEFAULT_KS))}). "
+        "Add 20 to measure the candidate set a reranker would be handed: `lexical@20` "
+        "was chosen as that set on a table that only reported k up to 10, so the choice "
+        "rested on an extrapolation. Recorded in the results JSON, because a `recall_at` "
+        "map cannot be read without knowing which ks were asked for.",
+    )
 
 
 def _add_tf_args(parser: argparse.ArgumentParser) -> None:
@@ -371,6 +398,7 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
         "noise range from too few trials overstates how readable a gain is.",
     )
     parser.add_argument("--out", type=Path, default=None, help="also write JSON")
+    _add_ks_args(parser)
     _add_tf_args(parser)
     _add_dense_args(parser)
     parser.set_defaults(func=_run)
@@ -434,6 +462,7 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
         "finding rather than a nuisance.",
     )
     doc_eval.add_argument("--out", type=Path, default=None, help="also write JSON")
+    _add_ks_args(doc_eval)
     _add_tf_args(doc_eval)
     _add_dense_args(doc_eval)
     doc_eval.set_defaults(func=_run_doc_eval)

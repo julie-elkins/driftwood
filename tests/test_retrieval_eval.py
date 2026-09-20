@@ -585,3 +585,38 @@ class TestTheFooterDescribesTheRunAndNotTheDefaults:
         assert header == f"{'repo':<20}{'ranker':<17}{'pool~':>6}{'n':>5}" + "".join(
             f"{'R@' + str(k):>7}" for k in (1, 5, 10)
         ) + f"{'MRR':>7}"
+
+
+class TestTheResultsFileDescribesItsOwnRun:
+    """Third instance of one defect: a figure about the run replaced by a module default.
+
+    The footer claimed 40 trials on an 8-trial run and was fixed; `to_json` wrote the
+    same constant into the artefact, where it is worse -- the footer misled for one
+    terminal session, the field misleads every future reader of a committed file whose
+    noise ranges are eight trials wide.
+    """
+
+    def _rows(self, ks=(1, 5, 10)):
+        return [
+            evaluate.RepoResult(
+                repo="a/b",
+                pool_median=20,
+                queries=3,
+                ranker=ranker,
+                recall_at=dict.fromkeys(ks, 0.5),
+                mrr=0.4,
+            )
+            for ranker in ("shuffle (floor)", "lexical")
+        ]
+
+    def test_the_trial_count_in_the_json_is_the_run_s_not_the_module_default(self):
+        payload = evaluate.to_json(self._rows(), [], None, null_trials=8)
+
+        assert payload["null_trials"] == 8
+        assert evaluate.NULL_TRIALS != 8, "otherwise this test cannot fail"
+
+    def test_the_cutoffs_are_recorded_so_the_recall_map_can_be_read(self):
+        payload = evaluate.to_json(self._rows(ks=(1, 5, 10, 20)), [], None)
+
+        assert payload["ks"] == [1, 5, 10, 20]
+        assert set(payload["results"][0]["recall_at"]) == {"1", "5", "10", "20"}

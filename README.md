@@ -713,11 +713,46 @@ direction is a property of the repo. It is not pool size (flask is 35 files and 
 ### What it changes for the reranker, which is the next thing
 
 The bar on fastapi is now `lexical-tf(k1=1.2)-ablated` R@10 0.649 rather than 0.606 — raising the
-bar before building the thing that has to clear it is why this ran first. The candidate-set
-decision needs re-measuring rather than re-deciding: "lexical@20 is the best candidate set on all
-five repos" was measured on `lexical`, and this eval reports k ∈ {1, 5, 10}, so **nothing here says
-what `lexical-tf@20` recall is.** And the binding cap is untouched: 13% of queries are missed by
-every arm at k=10, and reranking cannot surface what retrieval never returned.
+bar before building the thing that has to clear it is why this ran first. It also left the
+candidate-set decision needing re-measurement rather than re-deciding, since "lexical@20 is the
+best candidate set on all five repos" was asserted from a table that stopped at k=10; `--ks` now
+exists and the next section is that measurement. The binding cap is untouched either way: 13% of
+queries are missed by every arm at k=10, and reranking cannot surface what retrieval never
+returned.
+
+### The reranker's ceiling, measured before the reranker exists
+
+Stage 2d's reranker was designed to run over `lexical`'s top 20, on the grounds that lexical@20 is
+the best candidate set on all five repos. That was an extrapolation — the eval reported k up to 10.
+It now reports k=20, and the extrapolation does not survive contact:
+
+| repo | pool~ | top-20 is | best free R@10 | ceiling R@20 | headroom | R@10 noise | must capture |
+|---|---|---|---|---|---|---|---|
+| psf/requests | 23 | 87% | 0.76 | 0.94 | +0.187 | 0.349 | **impossible** |
+| encode/httpx | 24 | 83% | 0.82 | 0.97 | +0.154 | 0.168 | **impossible** |
+| pallets/flask | 35 | 57% | 0.83 | 0.93 | +0.103 | 0.077 | 75% |
+| pydantic/pydantic | 101 | 20% | 0.57 | 0.73 | +0.162 | 0.060 | 37% |
+| fastapi/fastapi | 685 | 3% | 0.65 | 0.71 | +0.059 | 0.037 | 62% |
+
+Two things fall out, and both are about the design rather than about any model.
+
+**On httpx and requests, a perfect reranker over the top 20 cannot produce a readable gain.** The
+whole headroom between the best free arm at k=10 and the ceiling at k=20 is smaller than the
+metric's noise width on that repo. Not unlikely — arithmetically unavailable. And on those two
+repos "top 20" is 83% and 87% of the entire code pool, so it is not a shortlist at all; a reranker
+there re-does the retrieval on a pool where a *shuffled* ranking already reaches R@20 of 0.81 and
+0.66. Those are two of the three repos the hand-labelled corpus covers, which means that corpus is
+the one least able to say anything about this stage.
+
+**pydantic is the most favourable repo, not fastapi** — 37% of its headroom against fastapi's 62%
+and flask's 75%. And which ranker feeds the reranker turns out not to be a decidable question:
+`lexical-ablated@20` against `lexical-tf@20` is 0.97/0.97, 0.70/0.71, 0.93/0.93, 0.94/0.94,
+0.70/0.73, every difference inside its own noise width. Term frequency, meanwhile, already took
+44% of fastapi's total available headroom for free — R@10 0.606 → 0.649 against a ceiling of 0.70
+— which is why the cheap experiment ran first.
+
+A run that reports "the reranker gained 0.04 R@10 on httpx" would look like a result and would be
+noise on a pool the floor nearly saturates. The table above is what stops that being written.
 
 ## Reproducibility
 
