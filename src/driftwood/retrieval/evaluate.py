@@ -126,6 +126,11 @@ def evaluate_split(
     # byte-identical across the ~350 shas scored, and the cache is what makes that cheap.
     count_cache: dict[str, Counter[str]] | None = None,
     tf_k1: float | None = None,
+    # Takes the base ranker AND the tree's code texts, because a reranker is a wrapper
+    # rather than a peer: it needs the same `lexical` object the baseline rows were
+    # scored with, or the head it reorders is not the head those rows reported.
+    rerank: Callable[[Ranker, dict[str, str]], Ranker] | None = None,
+    rerank_name: str | None = None,
 ) -> list[RepoResult]:
     """Run the shuffle floor and both free baselines on one repo.
 
@@ -152,6 +157,14 @@ def evaluate_split(
         scored_names += [tf_name, f"{tf_name}-ablated"]
     if dense is not None:
         scored_names += ["dense", "dense-ablated"]
+    # Last, so the free rows and the dense rows keep the order every committed results
+    # file already has. The reranker is also the only arm whose row must be read
+    # ADJACENT to its base's: alone it says nothing, because R@top_n is the base's by
+    # construction and the gain is only ever a reordering inside that set.
+    if rerank is not None:
+        if rerank_name is None:
+            raise ValueError("a rerank factory needs its row name; two cutoffs must not share a row")
+        scored_names += [rerank_name, f"{rerank_name}-ablated"]
     names = ["shuffle (floor)", *scored_names]
     recalls: dict[str, list[dict[int, float]]] = {name: [] for name in names}
     ranks: dict[str, list[float]] = {name: [] for name in names}
@@ -211,6 +224,25 @@ def evaluate_split(
             scored.update(
                 score_queries(
                     {"dense-ablated": ranker}, sha_queries, pool, doc_texts, ks, ablate=True
+                )
+            )
+        if rerank is not None:
+            # Wraps the SAME `lexical` object scored above, so `rerank(lexical@20)` and
+            # `lexical` differ by the reordering and nothing else -- not by a second
+            # tokenisation, and not by a differently-built IDF.
+            reranker = rerank(lexical, code_texts)
+            if reranker.name != rerank_name:
+                raise ValueError(
+                    f"reranker names itself {reranker.name!r} but the table reserved "
+                    f"{rerank_name!r}; the row would be labelled with the wrong cutoff"
+                )
+            scored.update(
+                score_queries({rerank_name: reranker}, sha_queries, pool, doc_texts, ks)
+            )
+            scored.update(
+                score_queries(
+                    {f"{rerank_name}-ablated": reranker},
+                    sha_queries, pool, doc_texts, ks, ablate=True,
                 )
             )
         for name, (query_recalls, query_ranks) in scored.items():
@@ -382,6 +414,34 @@ def format_results(
                 "is an unablated `lexical`, because no mining rule selected these "
                 "pairs."
             )
+    # Printed whenever a rerank row is present, because the row is unreadable without
+    # it: a reader who does not know R@N is pinned will read an unchanged R@20 as the
+    # reranker having no effect, when it is the one number it cannot possibly move.
+    rerank_rows = [r for r in results if r.ranker.startswith("rerank(")]
+    if rerank_rows:
+        cutoffs = sorted({r.ranker.split("@")[-1].split(")")[0] for r in rerank_rows})
+        lines.append("")
+        lines.append(
+            f"rerank(...@N) reorders only its base ranker's top N (N={', '.join(cutoffs)}) "
+            "and leaves the"
+        )
+        lines.append(
+            "tail alone, so recall@k for every k >= N is the BASE ranker's number, "
+            "unchanged by"
+        )
+        lines.append(
+            "construction rather than unmoved by the model. Only R@k below N and MRR "
+            "can move."
+        )
+        lines.append(
+            "Read each rerank row against its own base row, never against the floor: "
+            "the headroom"
+        )
+        lines.append(
+            "is base R@k to base R@N, and on the small-pool repos that whole span is "
+            "narrower than"
+        )
+        lines.append("the noise range -- there, a perfect reranker cannot show a gain.")
     return "\n".join(lines)
 
 

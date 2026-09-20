@@ -754,6 +754,107 @@ and flask's 75%. And which ranker feeds the reranker turns out not to be a decid
 A run that reports "the reranker gained 0.04 R@10 on httpx" would look like a result and would be
 noise on a pool the floor nearly saturates. The table above is what stops that being written.
 
+### The reranker itself: built, priced, and a loss on the corpus it could be run on
+
+`rerank(lexical@20)` reorders `lexical`'s top 20 with a cross-encoder — `ms-marco-MiniLM-L6-v2`,
+free and local — and leaves position 21 onward in base order. That split is the measurement rather
+than an optimisation: **R@k for every k ≥ 20 is the base ranker's by construction**, so R@20 is
+pinned and the only movable quantities are R@1, R@5, R@10 and MRR. The results table prints a
+footer saying so, because a row where R@20 matches the baseline exactly looks like a model that
+did nothing and is in fact a number that cannot move. A test asserts the invariance, including
+against a deliberately inverted scorer, rather than trusting the argument.
+
+Its chunking is **800/100, not the dense arm's 1600/200**, and that is forced rather than tuned. A
+bi-encoder gives each side its own 512-token window; a cross-encoder reads both sides inside *one*
+512-token window. Reusing 1600 would truncate roughly two thirds of every pair — the exact failure
+the dense arm was designed around, reintroduced by inheriting its numbers. Measured on real httpx
+chunks, a pair at 800/100 tokenises to min 262, median 461, max 509. Pooling is max over
+(doc chunk, code chunk) pairs, matching `Dense` exactly so that a difference between the two arms
+is attributable to the model and not to the pooling. The price of that parity is quadratic, and the
+price is the second thing that was measured before the score.
+
+**What it costs to run on the mined corpus, counted with a stub before any weights were loaded:**
+
+| repo | queries | pool~ | forward passes | duplicate | unique | unique/query | hours |
+|---|---|---|---|---|---|---|---|
+| psf/requests | 53 | 23 | 414,669 | 24% | 314,324 | 5,931 | 0.5 |
+| encode/httpx | 148 | 24 | 1,257,329 | 19% | 1,017,947 | 6,878 | 1.7 |
+| fastapi/fastapi | 82 | 685 | 1,452,280 | 8% | 1,329,271 | 16,211 | 2.3 |
+| pallets/flask | 396 | 35 | 4,731,602 | 15% | 4,044,683 | 10,214 | 6.9 |
+| pydantic/pydantic | 346 | 101 | 24,697,850 | 8% | 22,632,907 | 65,413 | **38.3** |
+| **total** | 1025 | | **32,553,730** | 9.9% | **29,339,132** | | **49.7** |
+
+Hours are unique passes at 164 pairs/s, which is the measured rate — 47 hours of that total is
+model time and the surrounding code is not the cost. Throughput was benchmarked on real pydantic
+and httpx chunks rather than random bytes, because token length is the whole variable:
+
+| device | precision | batch | pairs/s | full corpus |
+|---|---|---|---|---|
+| mps | fp32 | 64 | **164** | 49.7 h |
+| mps | fp32 | 256 | 113 | 72.1 h |
+| mps | fp16 | 64 | 207 | 39.4 h |
+| cpu | fp32 | 64 | 60 | 135.8 h |
+
+Batch 256 is *slower* than batch 64, which is worth knowing before anyone raises it for speed. fp16
+buys 26% and changes the arithmetic the scores are produced by, so it is a second variable bought
+for a 1.26× discount and is not the default.
+
+Two facts about that table matter more than its total. **Pair-cache reuse is 9.9%, not the
+embedding cache's near-total** — and the reason is structural, not a bug: the embedding cache wins
+because the same module is encoded once and reused across every query, whereas here *every query is
+a different document*, so the doc side of nearly every pair is new. A cache that saves 97% in one
+arm saving 10% in the next arm is the kind of thing that gets assumed rather than counted.
+And **pydantic alone is 77% of the bill** — while also being the repo the ceiling table names as
+*most favourable*. The cheapest repo to run and the likeliest repo to show something are not the
+same repo, so "run the cheap ones first" and "run the informative one first" are opposite
+instructions here.
+
+**The hand-labelled corpus was run, because it is free (7.5 minutes) and it is the corpus with the
+honest provenance — and the ceiling table already said it is the corpus least able to show a
+gain.** It lost on all three repos:
+
+| repo | n | arm | R@1 | R@5 | R@10 | R@20 | MRR | MRR noise width |
+|---|---|---|---|---|---|---|---|---|
+| encode/httpx | 6 | `lexical` | 0.15 | 0.70 | 0.94 | 1.00 | 0.81 | 0.39 |
+| encode/httpx | 6 | `rerank(lexical@20)` | 0.15 | 0.72 | 0.75 | 1.00 | 0.79 | 0.39 |
+| pallets/flask | 5 | `lexical` | 0.17 | 0.49 | 0.68 | 0.83 | 0.82 | 0.48 |
+| pallets/flask | 5 | `rerank(lexical@20)` | 0.12 | 0.40 | 0.74 | 0.83 | 0.72 | 0.48 |
+| psf/requests | 3 | `lexical` | 0.33 | 0.83 | 0.92 | 1.00 | 1.00 | 0.62 |
+| psf/requests | 3 | `rerank(lexical@20)` | 0.08 | 0.58 | 0.92 | 1.00 | 0.57 | 0.62 |
+
+R@20 held exactly, 3/3, which is the construction working and not a finding. Every MRR drop is
+**inside its own noise width** — 0.02 against 0.39, 0.10 against 0.48, 0.43 against 0.62 — so no
+single repo here says the reranker is worse. What is not noise is that the direction is the same on
+all three, and the honest weight of that is *weak*: 14 scoreable queries over three repos, two of
+which the ceiling table already ruled arithmetically incapable of showing a gain in either
+direction. requests' MRR 1.00 → 0.57 is legible at this n precisely because n is 3 — it is two of
+three queries demoted out of rank 1, to ranks 2 and 5. That is a sentence about three documents.
+
+**So the claim this section supports is "not measured yet", not "cross-encoder reranking does not
+work here."** The corpus that could answer costs 49.7 hours and has not been run. There are four
+ways to make it cheaper and every one of them changes what the resulting number means, which is why
+none was taken quietly: capping chunks per side is truncation, and truncation was already measured
+on the dense arm at 30–45% of MRR; dropping `top_n` to 10 halves the bill and also halves the
+headroom, moving flask and pydantic into their own noise widths; a long-context reranker with an
+8192-token window would be roughly 10× cheaper net, but the prediction registered before this stage
+named an ms-marco-class model and swapping it is a different experiment rather than the same one
+run faster; mean-pooling instead of max saves nothing at all, since every pair is scored either way.
+
+### Two bugs the design of this arm was shaped to avoid, one of which was nearly shipped
+
+**A default of 0.0 for an unscored candidate would promote whitespace.** Cross-encoder outputs are
+logits, not cosines — they go negative, and on this data most of them do. A candidate file that
+chunks to nothing therefore has to sort to the *back* of the head via `-inf`, not to the front on a
+zero that outranks two thirds of the real scores. The stub scorer in the tests returns overlap
+*minus five* for exactly this reason: a stub whose every output was positive would let that default
+pass every test in the file.
+
+**The pair cache stamp folds in the model id and the chunking, and refuses to load on a mismatch.**
+Mixing two encoders' vectors is bad; mixing two cross-encoders' logits is worse, because they are
+not even on a common scale, so the resulting ranking is arbitrary *and the run looks clean*. The
+keys are also written as fixed-width ASCII bytes rather than UTF-32, which sounds like
+housekeeping and is 1.1 GB against 4.3 GB at 32.5M pairs on a file rewritten after every repo.
+
 ## Reproducibility
 
 Every mine writes a manifest next to its output recording each repo's pinned sha, the commit
@@ -1206,7 +1307,7 @@ only signal in this project that a high-precision mode exists at all.
 | 2b · Retrieval — embeddings, chunked and cached | **built, measured, lost 5/5** |
 | 2c · Hand-labelled docs, candidates = the whole tree — the ground truth 2b needs | **built, 18 docs labelled, split verdict** |
 | 2d · Term frequency in `Lexical`, one lever, nested | **built, measured, readable on 1 repo of 5** |
-| 2d · Cross-encoder reranker over `lexical`'s top 20, scored on both corpora | designed |
+| 2d · Cross-encoder reranker over `lexical`'s top 20 | **built, measured on 2c (lost 3/3, all inside noise); mined corpus priced at 49.7 h, not run** |
 | 3 · The judge — does a document make a false claim, at one commit | **built, measured, lost to every free floor** |
 | 4 · Null-run harness — same input twice, to establish the noise floor | designed |
 | 5 · GitHub App + CI eval gate | designed |
@@ -1268,6 +1369,21 @@ uv run python scripts/complementarity.py data/mine.jsonl
 `--embed-model` bare means `BAAI/bge-small-en-v1.5`; naming a model instead swaps it, and
 `BAAI/bge-m3` is a one-flag upgrade at roughly 17x the compute — an overnight run rather than a
 different design. Add `--embed-device mps` on Apple silicon.
+
+The reranker is the same shape of flag and the same extra, off unless a model is named:
+
+```
+uv run driftwood doc-eval review/2c/SHEET.md --rerank-model --out data/scores/doclabel-rerank-top20.json
+uv run driftwood retrieve-eval data/mine.jsonl --rerank-model --rerank-device mps --rerank-batch 64
+```
+
+`--rerank-model` bare means `cross-encoder/ms-marco-MiniLM-L6-v2`; `--rerank-top-n` sets the cutoff
+and is in the row name, so two cutoffs are two rows rather than one overwritten one. **The second
+command is a 49.7-hour run on the mined corpus** — the per-repo prices are in the table above, and
+`--repos` narrows it. Pair scores cache under `.cache/rerank`, keyed on the text of both sides plus
+the model and the chunking, and the file is written after every repo, so an interrupted run resumes
+where it stopped rather than restarting. `--rerank-batch` defaults to 128; 64 measured faster than
+256 on mps, which is the opposite of the usual direction.
 
 Stage 3 likewise runs free by default. `judge-cases` prints the class balance and the floors and
 touches neither a clone nor a model; `judge-eval` with no flags runs the three judges that need no

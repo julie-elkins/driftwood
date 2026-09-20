@@ -13,7 +13,14 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-from . import DEFAULT_MODEL, dataset, evaluate, rankers
+from . import (
+    DEFAULT_MODEL,
+    DEFAULT_RERANK_MODEL,
+    DEFAULT_TOP_N,
+    dataset,
+    evaluate,
+    rankers,
+)
 
 __all__ = ["add_parser"]
 
@@ -74,6 +81,108 @@ def _build_dense(args: argparse.Namespace):
     return factory, provenance, embed_cache
 
 
+def _build_rerank(args: argparse.Namespace):
+    """The reranking arm, or `(None, None, None, None)` if it was not asked for.
+
+    Shared by both evals for the reason `_build_dense` is: the ceiling table says the
+    mined corpus is the only one with the headroom to show a gain here, so the two
+    tables will be read against each other and a reranker configured differently
+    between them would make that comparison meaningless without saying so.
+    """
+    if not args.rerank_model:
+        return None, None, None, None
+
+    # Imported here so a run without --rerank-model still works with no inference stack.
+    from .rerank import (
+        RERANK_CHUNKING,
+        CrossEncoderReranker,
+        CrossEncoderScorer,
+        PairCache,
+        default_pair_cache_path,
+    )
+
+    chunking = RERANK_CHUNKING
+    scorer = CrossEncoderScorer(
+        args.rerank_model, device=args.rerank_device, batch_size=args.rerank_batch
+    )
+    cache_path = None
+    if not args.no_rerank_cache:
+        cache_path = args.rerank_cache or default_pair_cache_path(
+            scorer.model_id, chunking, args.rerank_cache_root
+        )
+    cache = PairCache(cache_path, scorer.model_id, chunking)
+    factory = lambda base, code_texts: CrossEncoderReranker(  # noqa: E731
+        base, scorer, cache, code_texts, chunking, top_n=args.rerank_top_n
+    )
+    name = f"rerank(lexical@{args.rerank_top_n})"
+    provenance = {
+        "rerank_model": scorer.model_id,
+        "rerank_base": "lexical",
+        "rerank_top_n": args.rerank_top_n,
+        "rerank_chunk_size": chunking.size,
+        "rerank_chunk_overlap": chunking.overlap,
+        # Prefixed, because the dense arm writes `pooling` and `ablation` too and means
+        # something different by each. Two arms' keys colliding in one file would make
+        # whichever ran second look like a description of both.
+        "rerank_pooling": "max over (doc chunk, code chunk) pairs",
+        "rerank_recall_invariant_at_or_above_k": args.rerank_top_n,
+        "rerank_ablation": "evidence tokens redacted from doc text; the BASE ranker is "
+        "ablated too, so the reordered head is the ablated head",
+    }
+    print(f"rerank arm: {scorer.model_id} base=lexical top_n={args.rerank_top_n}")
+    print(f"  chunking {chunking.key} -- smaller than the dense arm's because a")
+    print("  cross-encoder reads both sides inside one 512-token window")
+    print(f"pair cache: {cache_path or 'disabled'}")
+    print()
+    return factory, provenance, cache, name
+
+
+def _merged_provenance(*parts: dict | None) -> dict | None:
+    """One provenance block per results file, or None if no model arm ran.
+
+    Merged rather than overwritten: a run with both a dense arm and a rerank arm writes
+    two models into one table, and a file recording only the last one configured would
+    make the other arm's rows uncheckable.
+    """
+    kept = [part for part in parts if part]
+    if not kept:
+        return None
+    merged: dict = {}
+    for part in kept:
+        for key, value in part.items():
+            # Each arm prefixes its own keys, so a collision here means one of them
+            # stopped doing that. Recorded rather than resolved -- dropping one side
+            # would leave a file that describes an arm it did not run.
+            if key in merged and merged[key] != value:
+                merged[f"{key}_conflict"] = [merged[key], value]
+            else:
+                merged[key] = value
+    return merged
+
+
+def _print_cache_stats(embed_cache, pair_cache) -> None:
+    """Reuse rates, because on this corpus they are the reason a run finishes.
+
+    Printed for both arms from one place so neither can be forgotten when the other is
+    added. A pair cache miss rate is the honest cost figure for the rerank arm: the pair
+    count is the product of two chunk counts, so "how many forward passes did this
+    actually cost" is not inferable from the query count.
+    """
+    for label, cache, verb in (
+        ("embedding", embed_cache, "encoded"),
+        ("pair", pair_cache, "scored"),
+    ):
+        if cache is None:
+            continue
+        total = cache.hits + cache.misses
+        if not total:
+            continue
+        print(
+            f"\n{label} cache: {cache.hits} hits, {cache.misses} {verb} "
+            f"({cache.hits / total:.0%} reused)"
+        )
+
+
 def _run(args: argparse.Namespace) -> int:
     splits = dataset.build(
         args.labels,
@@ -98,7 +207,9 @@ def _run(args: argparse.Namespace) -> int:
     # across repos for the same reason `token_cache` is.
     count_cache: dict[str, Counter[str]] = {}
 
-    dense_factory, provenance, embed_cache = _build_dense(args)
+    dense_factory, dense_provenance, embed_cache = _build_dense(args)
+    rerank_factory, rerank_provenance, pair_cache, rerank_name = _build_rerank(args)
+    provenance = _merged_provenance(dense_provenance, rerank_provenance)
 
     results = []
     for split in splits:
@@ -111,6 +222,8 @@ def _run(args: argparse.Namespace) -> int:
                 dense=dense_factory,
                 count_cache=count_cache,
                 tf_k1=args.tf_k1,
+                rerank=rerank_factory,
+                rerank_name=rerank_name,
             )
         )
         # Saved per repo rather than once at the end: a run over five repos takes long
@@ -118,18 +231,15 @@ def _run(args: argparse.Namespace) -> int:
         # real cost, and the cache is the expensive artefact here.
         if embed_cache is not None:
             embed_cache.save()
+        if pair_cache is not None:
+            pair_cache.save()
 
     print(
         evaluate.format_results(
             results, ks=tuple(args.ks), null_trials=args.null_trials
         )
     )
-    if embed_cache is not None:
-        total = embed_cache.hits + embed_cache.misses
-        print(
-            f"\nembedding cache: {embed_cache.hits} hits, {embed_cache.misses} encoded "
-            f"({embed_cache.hits / total:.0%} reused)"
-        )
+    _print_cache_stats(embed_cache, pair_cache)
 
     if args.out:
         payload = evaluate.to_json(
@@ -214,7 +324,9 @@ def _run_doc_eval(args: argparse.Namespace) -> int:
     print(dataset.format_dataset_report(splits))
     print()
 
-    dense_factory, provenance, embed_cache = _build_dense(args)
+    dense_factory, dense_provenance, embed_cache = _build_dense(args)
+    rerank_factory, rerank_provenance, pair_cache, rerank_name = _build_rerank(args)
+    provenance = _merged_provenance(dense_provenance, rerank_provenance)
     token_cache: dict[str, frozenset[str]] = {}
     count_cache: dict[str, Counter[str]] = {}
     results = []
@@ -230,10 +342,14 @@ def _run_doc_eval(args: argparse.Namespace) -> int:
                 dense=dense_factory,
                 count_cache=count_cache,
                 tf_k1=args.tf_k1,
+                rerank=rerank_factory,
+                rerank_name=rerank_name,
             )
         )
         if embed_cache is not None:
             embed_cache.save()
+        if pair_cache is not None:
+            pair_cache.save()
 
     # The ablated arms are dropped rather than not run. `evaluate_split` ablates each
     # query's `evidence`, which is empty on every query here because no mining rule
@@ -250,6 +366,7 @@ def _run_doc_eval(args: argparse.Namespace) -> int:
     print("proposed. These pairs were proposed by a person reading prose, so there is no")
     print("such channel and nothing to strike. Compare these rows against the ABLATED")
     print("rows of the mined eval -- those are that corpus's defensible numbers.")
+    _print_cache_stats(embed_cache, pair_cache)
 
     if args.out:
         payload = evaluate.to_json(
@@ -308,6 +425,62 @@ def _add_tf_args(parser: argparse.ArgumentParser) -> None:
         "BM25's conventional value). k1 -> 0 collapses onto `lexical` exactly, which is "
         "what makes a loss attributable to term frequency rather than to a rewrite.",
     )
+
+
+def _add_rerank_args(parser: argparse.ArgumentParser) -> None:
+    rerank = parser.add_argument_group(
+        "rerank arm (needs `uv sync --extra embed`)",
+        "Off unless --rerank-model is given. Reorders `lexical`'s top N and nothing "
+        "else, so recall@k for k >= N is `lexical`'s by construction -- the bar is the "
+        "`lexical` row directly above it, and the headroom is that row's R@k to its "
+        "R@N. Measure the ceiling with `--ks N` before reading any gain: on the "
+        "small-pool repos the entire span is narrower than the noise range.",
+    )
+    rerank.add_argument(
+        "--rerank-model",
+        nargs="?",
+        const=DEFAULT_RERANK_MODEL,
+        default=None,
+        help="turn the rerank arm on. Bare, it uses "
+        f"{DEFAULT_RERANK_MODEL}. Must be a CROSS-encoder id: a bi-encoder "
+        "passed here loads and produces numbers, and they are not relevance scores.",
+    )
+    rerank.add_argument(
+        "--rerank-top-n",
+        type=int,
+        default=DEFAULT_TOP_N,
+        help=f"how many of the base ranker's candidates to reorder (default: "
+        f"{DEFAULT_TOP_N}, the set the ceiling was measured on). Carried in "
+        "the row name, because two cutoffs are two experiments.",
+    )
+    rerank.add_argument(
+        "--rerank-cache",
+        type=Path,
+        default=None,
+        help="explicit path for the pair-score cache (.npz). Defaults to a name derived "
+        "from the model and chunking, so two models do not collide on one file -- their "
+        "logits are not even on the same scale.",
+    )
+    rerank.add_argument(
+        "--rerank-cache-root",
+        type=Path,
+        default=Path(".cache/rerank"),
+        help="where derived cache filenames live (default: .cache/rerank)",
+    )
+    rerank.add_argument(
+        "--no-rerank-cache",
+        action="store_true",
+        help="score every pair every run. The pair count is the PRODUCT of the two "
+        "sides' chunk counts, so this is much more than the slow path it is on the "
+        "dense arm; only useful for timing the model.",
+    )
+    rerank.add_argument(
+        "--rerank-device",
+        default=None,
+        help="torch device: mps on Apple silicon, cuda, or cpu (default: let "
+        "sentence-transformers choose)",
+    )
+    rerank.add_argument("--rerank-batch", type=int, default=128)
 
 
 def _add_dense_args(parser: argparse.ArgumentParser) -> None:
@@ -401,6 +574,7 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
     _add_ks_args(parser)
     _add_tf_args(parser)
     _add_dense_args(parser)
+    _add_rerank_args(parser)
     parser.set_defaults(func=_run)
 
     sample = subparsers.add_parser(
@@ -465,4 +639,5 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
     _add_ks_args(doc_eval)
     _add_tf_args(doc_eval)
     _add_dense_args(doc_eval)
+    _add_rerank_args(doc_eval)
     doc_eval.set_defaults(func=_run_doc_eval)
