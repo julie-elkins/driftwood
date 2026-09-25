@@ -8,9 +8,17 @@ catches: a README that promises a flag the code renamed, a tutorial whose import
 compatibility claim that a `setup.py` change silently falsified two years ago. Docs do not
 fail loudly. They just become wrong.
 
-**Status: stage 1 of 5.** The ground-truth layer is built and measured. The retrieval and
-agent layers are not. Everything below is a measurement, not a projection — where a number
-is unreliable, this README says so.
+**Status: stages 1 through 4 are built and measured. Stage 5 is deliberately not built.** The
+ground-truth miner, retrieval, the judge and the run-to-run null run all have numbers below.
+What none of them has is a win: every judge arm lost to a free floor, and that is reported here
+rather than buried. Everything below is a measurement, not a projection — where a number is
+unreliable, this README says so.
+
+That line read **"stage 1 of 5. The retrieval and agent layers are not [built]"** until
+2026-09-25 — four stages after it stopped being true, in the front matter of a repository whose
+entire purpose is catching documentation that has quietly stopped being true. It is recorded
+here rather than silently corrected. The defect was invisible for the same reason the mined
+ones are: nothing fails when a status line decays, so nobody reads it again.
 
 ---
 
@@ -1545,6 +1553,32 @@ Five predictions, written before any trial is bought:
 5. At least one case will be **answered both ways** across three trials. A contradiction rate of
    exactly zero at temperature 0 is the result that would make me look for a shared cache first.
 
+### The same gap, found independently on unrelated data
+
+[llm-eval-validity](https://github.com/julie-elkins/llm-eval-validity) audits a different
+harness — 216 graded agent turns from a customer-service agent, nothing to do with documentation
+drift — and arrives at this stage from the opposite end. It had two judges read the same 192
+replies **five times each**, and the result is the argument for this whole section: read pass one
+alone and one judge leads the other; read all five and the two judges' ranges overlap. **The
+difference between the models was no larger than the difference between one model and itself.**
+A single pass would have reported a winner that does not exist, and the survey of comparable
+published judge comparisons in that repository found none that ran more than one.
+
+So the two repositories are the same claim approached from either side. That one measured the
+spread and found it swallowed a reported result. This one had been quoting a **0.015** margin
+between a judge and a constant for six days with no spread measured at all — which is why the
+paid half above is a gap to be closed rather than a nicety, and why the free half was built to
+fail loudly first.
+
+They do not share a method, and that is deliberate. The other study reaches for the
+reliability-and-agreement toolkit its data supports, because it has a human reference standard
+and repeated readings of the same turns. Nothing in this repository imports that toolkit:
+stage 3 reports accuracy against an explicit constant floor and F1 on the positive class,
+because with one label per case and no second rater, an agreement statistic here would be a
+borrowed number rather than a measured one. Convergent conclusions from non-shared instruments
+are worth more than either result alone; identical instruments would only have proved the
+instrument is consistent.
+
 ## Roadmap
 
 | stage | state |
@@ -1557,7 +1591,7 @@ Five predictions, written before any trial is bought:
 | 2d · Cross-encoder reranker over `lexical`'s top 20 | **DONE — 32.5M passes, 55 h. No readable gain on the ablated row of any of the 5 repos; the one non-ablated gain traces to the label rule** |
 | 3 · The judge — does a document make a false claim, at one commit | **built, measured, lost to every free floor** |
 | 4 · Null-run harness — same input twice, to establish the noise floor | **built; harness control passes at exactly 0.000 on five free judges, 130/130 cases stable. The paid width is priced at ~2.69M input tokens and NOT bought** |
-| 5 · GitHub App + CI eval gate | designed |
+| 5 · GitHub App + CI eval gate | **designed, and deliberately NOT built — a decision, not a gap.** A CI gate that blocks a merge needs a judge whose error rate is known and better than a constant. This one's is known and is not, so the gate would either block correct docs or pass silently, and deploying it would convert a measured loss into an unmeasured one |
 
 Stage 3 is not architecture on faith. Version-support claims turned out to be a class that
 identifier overlap provably cannot handle: `docs/index.rst` asserting "supports Python 3.7"
