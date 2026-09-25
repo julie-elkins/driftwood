@@ -1441,6 +1441,110 @@ only signal in this project that a high-precision mode exists at all.
   judge is constructed, so a bad value is a message instead of a bill; a rung above 21,333 needs
   streaming, which is a change to `_reply` and not a flag.
 
+## Stage 4: the null run, and the control that was missing under every number above
+
+Every result in this file is phrased as inside or outside a width. Stage 2's width is a shuffled
+ranking; stage 3's is a coin weighted to the corpus positive rate. Both are controls over the
+**data**. Neither answers the question a reader assumes has already been answered: run the same
+command twice, change nothing, and how far does the headline move?
+
+That gap is not pedantic here. Stage 3's largest margin over a constant is **0.015 F1**, and stage
+2d's one readable gain is a tenth of a point wide. A run-to-run width of 0.05 would make both of
+them unreadable, and until this stage nothing in the repository could have said so either way.
+
+`judge-null-run` judges one arm K times, then reports min–max per metric, per-case stability split
+by *kind* of flip, and the run-to-run width next to the chance range it may replace as the binding
+floor.
+
+### The free half ran, and it is a test of this harness rather than of any judge
+
+`always-false`, `always-not-false` and `lexical-absence` are pure functions of their context, so
+their width **must** come out at exactly 0.000. Three trials, `retrieved` arm, 150 contexts built
+once and shared, 130 scoreable:
+
+| judge | F1, every trial | width on F1, precision, recall, accuracy | cases answered identically every trial |
+|---|---|---|---|
+| `always-not-false` | 0.000 | 0.000 | 130 / 130 |
+| `always-false` | 0.415 | 0.000 | 130 / 130 |
+| `lexical-absence(>=1)` | 0.426 | 0.000 | 130 / 130 |
+| `lexical-absence(>=3)` | 0.437 | 0.000 | 130 / 130 |
+| `lexical-absence(>=6)` | 0.391 | 0.000 | 130 / 130 |
+
+**0.000 on all four metrics of all five judges, and 130 of 130 cases stable.** That is not a finding
+about those judges — a constant that did not hold still would be a broken constant. It is the
+instrument calibrated before anything is quoted from it. Case ordering, contexts rebuilt per trial,
+a judge holding state between passes, or two trials sharing a cache directory would each show up
+here, on a judge that cannot vary, and the report then refuses to print a width at all: *HARNESS
+FAULT … Do not buy a paid trial until this reads 0.000.*
+
+**It says nothing whatever about the model's width.** Zero on a constant is a property of the
+constant. The number stage 3 needs has not been bought.
+
+### Three decisions, each of which reports a NARROWER width if it is got wrong
+
+- **The reply cache is bypassed by giving every trial one of its own.** `.cache/judgements` is
+  keyed on the rendered prompt, the system prompt and the model — deliberately, because that is
+  what makes a published result re-readable without a key. Run a null run over it and every trial
+  after the first is served byte-identically off disk: **width 0.000, from a run that made no
+  calls.** Perfectly clean, and perfectly wrong. `cache_dir=None` would fix the wrongness and throw
+  the replies away, which loses the audit trail and makes re-reading the analysis cost the whole
+  bill again. So each trial writes `.cache/null-run/trial-NN/`, the historical cache is neither
+  read nor written, and the `cached` column in the report is what actually came off disk. Two
+  things come free with that: a dead run resumes, and `--trials` can be *raised* later for the
+  price of the new trials alone — which matters, because the honest trial count is higher than the
+  affordable one.
+- **Trials run one after another, not interleaved case by case.** Asking one case K times back to
+  back puts its K draws within seconds of each other, which narrows anything that varies over
+  minutes or hours: a model snapshot rolling mid-run, load-dependent routing, a cache warming
+  upstream. Sequential is the conservative order — it can only widen what this reports.
+- **A width from K trials is a lower bound, not a range.** A p5–p95 over three values is arithmetic
+  on nothing: it returns the extremes under a label claiming they are not the extremes. min–max
+  says what it is, every line that prints a width says *A LOWER BOUND*, and the trial count sits
+  next to it in the score file — a 3-trial width and a 10-trial width are not the same quantity.
+
+Two smaller ones. The contexts are built **once** and shared by every trial, so a difference
+between trials cannot be retrieval having moved. And cases whose rendered prompt is byte-identical
+share a cache key, so within a trial the second is served the first's reply and the two *cannot*
+disagree — correct, since one prompt is one purchase, and it suppresses measured variance, so it is
+counted and printed: **6 of the 150 contexts on this arm.** For a per-claim arm the check is
+unavailable rather than passing, and the report says `NOT CHECKED`.
+
+A stable headline is also not a stable judge, which is why stability is counted per case and split
+into *contradictions* (answered both ways) and *abstention flips* (answer ↔ abstain). Eight cases
+flipping to `false` and eight to `not-false` leave F1 almost exactly where it was.
+
+### The paid half is priced and not bought, and the predictions are written down first
+
+The width stage 3 needs is on the arm stage 3's headline was measured on: `--arm seeded`,
+`model:claude-sonnet-5`. That arm is **70 shape-A cases now, not the 45 the 0.364 was measured on**
+— the 25-case batch added 25 more — so three trials is 210 calls and **~2,686,347 estimated input
+tokens**, priced by `--dry-run` on the prompts actually built, with no key present and nothing
+sent. At the rate the 45-case pass was billed that is on the order of $13.
+
+Which makes the comparison one step longer than it looks, and the step is the one this project
+exists to catch: **the F1 the null run reports is not comparable to 0.364**, because it is measured
+on a corpus 25 cases larger. The width is transferable and the level is not. Reading the two as one
+number would be quoting a score against another corpus's floor, which this file has already done
+once and kept.
+
+Five predictions, written before any trial is bought:
+
+1. The run-to-run F1 width will be **≥ 0.03** — wider than the 0.015 margin the floors table now
+   turns on, and therefore enough on its own to make that comparison unreadable.
+2. It will still be **narrower than the chance range**, which was 0.370 wide on the 45-case version
+   of this arm (0.087–0.457) and is recomputed on the 70 by the run itself, which prints the two
+   widths against each other. So the chance range stays the binding floor for the stage-3 tables
+   rather than being replaced by this one.
+3. **More cases will flip between an answer and an abstention than will answer both ways.** 12 of
+   45 abstained on this arm and the per-claim arm declined on 44% of individual claims, so what the
+   model is least settled about is whether it has enough in front of it to decide — not which way
+   to decide.
+4. **The instability will be concentrated on the `drift` positives**, at more than twice the
+   negatives' rate. F1 is computed from that half, so it will move further than the overall flip
+   rate predicts.
+5. At least one case will be **answered both ways** across three trials. A contradiction rate of
+   exactly zero at temperature 0 is the result that would make me look for a shared cache first.
+
 ## Roadmap
 
 | stage | state |
@@ -1452,7 +1556,7 @@ only signal in this project that a high-precision mode exists at all.
 | 2d · Term frequency in `Lexical`, one lever, nested | **built, measured, readable on 1 repo of 5** |
 | 2d · Cross-encoder reranker over `lexical`'s top 20 | **DONE — 32.5M passes, 55 h. No readable gain on the ablated row of any of the 5 repos; the one non-ablated gain traces to the label rule** |
 | 3 · The judge — does a document make a false claim, at one commit | **built, measured, lost to every free floor** |
-| 4 · Null-run harness — same input twice, to establish the noise floor | designed |
+| 4 · Null-run harness — same input twice, to establish the noise floor | **built; harness control passes at exactly 0.000 on five free judges, 130/130 cases stable. The paid width is priced at ~2.69M input tokens and NOT bought** |
 | 5 · GitHub App + CI eval gate | designed |
 
 Stage 3 is not architecture on faith. Version-support claims turned out to be a class that
@@ -1599,6 +1703,21 @@ file's provenance block, because a flag that changes the cache key changed the r
 
 `--only-cases` takes ids or `@file`, and prints a warning that its F1 is not a result: a set
 chosen because those cases previously failed is selected on the outcome being measured.
+
+Stage 4 is the same corpus judged more than once. The free form is a control on this harness and
+costs nothing; the paid form is priced first and sends nothing until it is asked twice:
+
+```
+uv run driftwood judge-null-run --trials 3 --out data/scores/judge-null-run-free-retrieved.json
+uv run driftwood judge-null-run --arm seeded --judges model --trials 3 --dry-run
+```
+
+It takes one `--arm`, not several: a second arm multiplies the bill by a factor that buys a
+different question rather than a better answer to this one. `--trials 1` is refused rather than
+clamped, because a single pass has no width and printing 0.000 from one would be the most
+convincing wrong answer this harness could produce. Every flag that sits inside the cache key is
+shared with `judge-eval` and comes from the same definition, so a null run cannot quietly measure a
+harness that produced none of the results its width is quoted against.
 
 **Caching is the default and opting out is the flag**, which is the way round that matters here.
 The corpus is 8148 unique code blobs behind 629 trees, so a forgotten cache produces an identical

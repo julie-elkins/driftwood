@@ -49,11 +49,20 @@ from .judge import (
     CLAIM_SYSTEM_PROMPT,
     DEFAULT_MAX_RETRIES,
     DEFAULT_MAX_TOKENS,
+    PAID_PREFIXES,
     SYSTEM_PROMPT,
     AlwaysJudge,
     AnthropicJudge,
     LexicalJudge,
     PerClaimJudge,
+    is_paid,
+)
+from .nullrun import (
+    DEFAULT_TRIALS,
+    format_null_run,
+    null_run_json,
+    summarise_trial,
+    trial_cache,
 )
 
 __all__ = ["add_parser"]
@@ -71,15 +80,11 @@ FREE_JUDGES = ("always-not-false", "always-false", "lexical-absence")
 JUDGE_GROUPS = {"floors": FREE_JUDGES}
 JUDGE_CHOICES = ("floors", "model", "per-claim", *FREE_JUDGES)
 
-# The judges that cost money, by name prefix. A list rather than `startswith("model:")`
-# spelled inline, because that test was in three places and the per-claim judge is the
-# second paid arm: a spend preflight that silently does not recognise a paid judge is the
-# one bug in this file that cannot be caught by reading the output afterwards.
-PAID_PREFIXES = ("model:", "per-claim")
-
-
-def _is_paid(name: str) -> bool:
-    return name.startswith(PAID_PREFIXES)
+# `PAID_PREFIXES` and the predicate over it moved to `judge.py`, next to the classes whose
+# names they match, once stage 4 needed the complementary question -- which judges cannot
+# vary between two identical runs. Re-exported here under the name this module's callers
+# and tests already use, rather than copied: one prefix list, two readers.
+_is_paid = is_paid
 
 
 def _judge_arg(value: str) -> str:
@@ -188,8 +193,20 @@ def _cmd_freeze(args: argparse.Namespace) -> int:
     return 0
 
 
-def _build_judges(args: argparse.Namespace) -> dict[str, object]:
+def _build_judges(
+    args: argparse.Namespace, *, cache: Path | None = None
+) -> dict[str, object]:
+    """The judges `--judges` names. `cache` overrides where replies are read and written.
+
+    The override exists for stage 4 and for nothing else. A null run has to give every
+    trial a cache directory of its own -- otherwise trial 2 is served trial 1's reply and
+    reports a run-to-run width of zero from a run that made no calls -- and the judges are
+    otherwise identical between trials, so rebuilding them per trial with a different
+    directory is the whole of the difference. `None` means `args.cache`, which is what
+    every other caller wants.
+    """
     judges: dict[str, object] = {}
+    cache = args.cache if cache is None else cache
     wanted = _expand_groups(args.judges)
     if "always-not-false" in wanted:
         judges["always-not-false"] = AlwaysJudge(False)
@@ -205,7 +222,7 @@ def _build_judges(args: argparse.Namespace) -> dict[str, object]:
     if "model" in wanted:
         judge = AnthropicJudge(
             model=_model_from_judges(args.judges, args.model),
-            cache_dir=args.cache, max_tokens=args.max_tokens,
+            cache_dir=cache, max_tokens=args.max_tokens,
             retry_max_tokens=args.retry_max_tokens, effort=args.effort,
             max_retries=args.max_retries,
         )
@@ -215,7 +232,7 @@ def _build_judges(args: argparse.Namespace) -> dict[str, object]:
     if "per-claim" in wanted:
         judge = PerClaimJudge(
             model=_model_from_judges(args.judges, args.model),
-            cache_dir=args.cache, max_tokens=args.max_tokens,
+            cache_dir=cache, max_tokens=args.max_tokens,
             retry_max_tokens=args.retry_max_tokens, effort=args.effort,
             max_retries=args.max_retries,
             batch_size=args.claim_batch,
@@ -224,14 +241,70 @@ def _build_judges(args: argparse.Namespace) -> dict[str, object]:
     return judges
 
 
-def _cmd_eval(args: argparse.Namespace) -> int:
-    cases, tally = load_cases(args.review, args.data)
-    if not cases:
-        print("no labelled cases found; nothing to score", file=sys.stderr)
-        return 1
-    print(format_case_report(cases, tally))
-    print()
+def _build_contexts(builder: ContextBuilder, arm_cases, arm: str) -> dict:
+    """Build one context per case, reporting the ones that cannot be judged.
 
+    Shared by the eval and the null run, and shared rather than written twice because the
+    reporting is the load-bearing half. A case with no readable doc or no code side is a
+    case the judge was never asked about, and it has to come off the denominator VISIBLY
+    or every rate downstream is computed against a corpus size that is not the one
+    measured. Two copies of that would be two chances to drop the message.
+    """
+    contexts = {}
+    unusable = []
+    for case in arm_cases:
+        context = builder.build(case, arm)
+        if not context.usable:
+            unusable.append(context)
+            continue
+        contexts[case.example_id] = context
+    if unusable:
+        print(
+            f"arm {arm}: {len(unusable)} case(s) had no readable document or no "
+            f"code file at their parent commit and were not judged: "
+            + ", ".join(sorted(c.example_id for c in unusable))
+        )
+    return contexts
+
+
+def _estimate_judge(judge, contexts, *, max_tokens: int) -> dict:
+    """What one paid judge will cost over these contexts, in tokens.
+
+    Per judge, never one figure for the arm. The per-claim judge sends a different prompt a
+    different number of times -- 168 calls to the per-page judge's 45 on the seeded arm --
+    so a single estimate would under-read it by 3.5x, in the cheap-looking direction, which
+    is the one direction an estimate must not be wrong in. That mistake has already been
+    made twice in this project: once by omitting the system prompt from the count, once by
+    guessing chars-per-token high.
+
+    One function rather than one per command, for the same reason. Stage 4 multiplies this
+    by a trial count, and a second pricing path that forgot the per-claim case would
+    under-read a null run by the same 3.5x with the multiplier on top of it.
+    """
+    contexts = list(contexts)
+    if isinstance(judge, PerClaimJudge):
+        prompts = [
+            render_claim_batch(context, group)
+            for context in contexts
+            for group in claim_batch(
+                claim_units(context.doc_full or context.doc_text), judge.batch_size
+            )
+        ]
+        return estimate_spend(
+            prompts, system=CLAIM_SYSTEM_PROMPT, max_tokens=max_tokens
+        )
+    return estimate_spend(
+        [render(c) for c in contexts], system=SYSTEM_PROMPT, max_tokens=max_tokens
+    )
+
+
+def _select_cases(cases: list, args: argparse.Namespace) -> list | None:
+    """Apply `--repos`, `--only-cases` and `--limit`. `None` means the run is refused.
+
+    Extracted so the null run cannot select its corpus by a second set of rules. The
+    refusal below is the reason: a mistyped id has to stop the run in both commands, and a
+    null run over a silently smaller set would report a width for a corpus nobody chose.
+    """
     if args.repos:
         cases = [c for c in cases if c.repo in set(args.repos)]
     if args.only_cases:
@@ -249,7 +322,7 @@ def _cmd_eval(args: argparse.Namespace) -> int:
                 + (" ..." if len(missing) > 5 else ""),
                 file=sys.stderr,
             )
-            return 1
+            return None
         cases = [c for c in cases if c.example_id in wanted]
         # Louder than --limit's note, because a DELIBERATELY CHOSEN subset is the more
         # dangerous of the two. A prefix is merely unrepresentative; a set picked because
@@ -268,6 +341,21 @@ def _cmd_eval(args: argparse.Namespace) -> int:
         # smoke-testing the harness rather than for producing a number.
         cases = cases[: args.limit]
         print(f"NOTE: --limit {args.limit} -- this is a smoke test, not a result\n")
+    return cases
+
+
+def _cmd_eval(args: argparse.Namespace) -> int:
+    cases, tally = load_cases(args.review, args.data)
+    if not cases:
+        print("no labelled cases found; nothing to score", file=sys.stderr)
+        return 1
+    print(format_case_report(cases, tally))
+    print()
+
+    selected = _select_cases(cases, args)
+    if selected is None:
+        return 1
+    cases = selected
 
     judges = _build_judges(args)
     if not judges:
@@ -292,24 +380,7 @@ def _cmd_eval(args: argparse.Namespace) -> int:
             print(f"arm {arm}: no cases carry a code_path; skipped\n")
             continue
 
-        contexts = {}
-        unusable = []
-        for case in arm_cases:
-            context = builder.build(case, arm)
-            if not context.usable:
-                unusable.append(context)
-                continue
-            contexts[case.example_id] = context
-        if unusable:
-            # Not dropped silently: a case with no readable doc or no code side is a
-            # case the judge was never asked about, and it has to come off the
-            # denominator visibly or every rate below is computed against a corpus
-            # size that is not the one that was scored.
-            print(
-                f"arm {arm}: {len(unusable)} case(s) had no readable document or no "
-                f"code file at their parent commit and were not judged: "
-                + ", ".join(sorted(c.example_id for c in unusable))
-            )
+        contexts = _build_contexts(builder, arm_cases, arm)
 
         truncated_docs = sum(1 for c in contexts.values() if c.doc_truncated)
         # Reported because it was not, and 29 of the 45 oracle contexts were in it. The
@@ -373,33 +444,12 @@ def _cmd_eval(args: argparse.Namespace) -> int:
         # for. Measured off the prompts that were actually built, so a mis-set --k or a
         # forgotten --limit shows up as a number here rather than on a bill.
         paid = [name for name in judges if _is_paid(name)]
-        # Per judge, not one figure for the arm. The per-claim judge sends a different
-        # prompt a different number of times -- 168 calls to the per-page judge's 45 on the
-        # seeded arm -- so a single estimate would under-read it by 3.5x, in the
-        # cheap-looking direction, which is the one direction an estimate must not be wrong
-        # in. That mistake has already been made twice in this project: once by omitting
-        # the system prompt from the count, once by guessing chars-per-token high.
-        estimates: dict[str, dict] = {}
-        for name in paid:
-            judge = judges[name]
-            if isinstance(judge, PerClaimJudge):
-                prompts = [
-                    render_claim_batch(context, group)
-                    for context in contexts.values()
-                    for group in claim_batch(
-                        claim_units(context.doc_full or context.doc_text),
-                        judge.batch_size,
-                    )
-                ]
-                estimates[name] = estimate_spend(
-                    prompts, system=CLAIM_SYSTEM_PROMPT, max_tokens=args.max_tokens
-                )
-            else:
-                estimates[name] = estimate_spend(
-                    [render(c) for c in contexts.values()],
-                    system=SYSTEM_PROMPT,
-                    max_tokens=args.max_tokens,
-                )
+        estimates = {
+            name: _estimate_judge(
+                judges[name], contexts.values(), max_tokens=args.max_tokens
+            )
+            for name in paid
+        }
         if paid:
             # `flush=True`, because the point of a preflight is to be on screen BEFORE
             # the spend. Python block-buffers stdout when it is not a terminal, so
@@ -541,6 +591,300 @@ def _median(values) -> float:
     return (values[middle - 1] + values[middle]) / 2
 
 
+def _cmd_null_run(args: argparse.Namespace) -> int:
+    """Stage 4: judge the same input several times and report how far the answer moves.
+
+    One arm, not several. `judge-eval` takes `--arms` because comparing arms is the point
+    of it; here a second arm multiplies the bill by a factor that buys a second question
+    rather than a better answer to this one, and the number every other result needs is the
+    width on the arm those results were measured on.
+    """
+    if args.trials < 2:
+        # Refused rather than clamped. One trial has no width at all, and a null run that
+        # printed 0.000 from a single pass would be the most convincing wrong answer this
+        # harness could produce.
+        print(
+            f"--trials {args.trials}: a null run needs at least 2 passes to have a width. "
+            f"The default is {DEFAULT_TRIALS}, which is the smallest count where a third "
+            "draw can contradict the first two.",
+            file=sys.stderr,
+        )
+        return 1
+
+    cases, tally = load_cases(args.review, args.data)
+    if not cases:
+        print("no labelled cases found; nothing to score", file=sys.stderr)
+        return 1
+    print(format_case_report(cases, tally))
+    print()
+
+    selected = _select_cases(cases, args)
+    if selected is None:
+        return 1
+    cases = selected
+
+    arm = args.arm
+    needs_code_side = arm in ("oracle", "seeded")
+    arm_cases = [c for c in cases if c.code_path] if needs_code_side else cases
+    if not arm_cases:
+        print(f"arm {arm}: no cases carry a code_path; nothing to run", file=sys.stderr)
+        return 1
+
+    # Built ONCE, outside the trial loop, and that is the measurement rather than an
+    # optimisation: if the contexts were rebuilt per trial, a difference between trials
+    # could be retrieval moving rather than the judge, and the two would be
+    # indistinguishable in the output.
+    builder = ContextBuilder(
+        args.clone_root, k=args.k,
+        code_budget=args.code_budget, doc_budget=args.doc_budget,
+    )
+    contexts = _build_contexts(builder, arm_cases, arm)
+    if not contexts:
+        print(f"arm {arm}: no usable contexts; nothing to run", file=sys.stderr)
+        return 1
+    scored = [c for c in arm_cases if c.example_id in contexts]
+    print(
+        f"arm {arm}: {len(contexts)} context(s) built once and shared by all "
+        f"{args.trials} trial(s)"
+    )
+
+    # Trial 0's judges, only to price the run and to name the judges. Each trial rebuilds
+    # them against its own cache directory below.
+    probe = _build_judges(args, cache=trial_cache(args.cache_root, 0))
+    if not probe:
+        print("no judges selected", file=sys.stderr)
+        return 1
+
+    # Two cases whose rendered prompt is byte-identical share a cache key, so within one
+    # trial the second is served the first's reply and the two cannot disagree. Correct --
+    # one prompt is one purchase -- and it narrows every width this reports, so it is
+    # counted. Only computable for a judge that renders one prompt per case; left as None
+    # for a per-claim arm, which the report prints as NOT CHECKED rather than as passing.
+    duplicate_prompts: int | None = None
+    if not any(isinstance(j, PerClaimJudge) for j in probe.values()):
+        rendered = Counter(render(c) for c in contexts.values())
+        duplicate_prompts = sum(n - 1 for n in rendered.values() if n > 1)
+
+    paid = [name for name in probe if _is_paid(name)]
+    if paid:
+        total = 0
+        print(
+            f"{', '.join(paid)} will be charged for, {args.trials} times over -- the "
+            "trials are the cost of this measurement and there is no cached shortcut, "
+            "because a cached trial is the thing being avoided",
+            flush=True,
+        )
+        for name in paid:
+            estimate = _estimate_judge(
+                probe[name], contexts.values(), max_tokens=args.max_tokens
+            )
+            print(f"  {name}, per trial:", flush=True)
+            print(format_spend(estimate), flush=True)
+            per_trial = int(estimate["input_tokens_approx"])
+            total += per_trial * args.trials
+            print(
+                f"  x{args.trials} trial(s): ~{per_trial * args.trials:,} estimated input "
+                "tokens",
+                flush=True,
+            )
+        print(
+            f"  ~{total:,} estimated input tokens for the whole null run. An UPPER bound: "
+            "a trial already banked under its own cache directory is re-read for nothing, "
+            "and the `cached` column in the report is the exact figure after the fact.",
+            flush=True,
+        )
+        if args.max_input_tokens and total > args.max_input_tokens:
+            print(
+                f"  REFUSING: estimated {total:,} input tokens exceeds "
+                f"--max-input-tokens {args.max_input_tokens:,}. Nothing was sent.",
+                file=sys.stderr,
+            )
+            return 1
+        if args.dry_run:
+            print(
+                "\n--dry-run: nothing was sent. The estimate above is the whole output.\n"
+                "Priced before any spend, on the prompts that were actually built, which "
+                "is the same\ndiscipline that priced the stage-2d reranker arm to zero "
+                "error."
+            )
+            return 0
+    elif args.dry_run:
+        print("\n--dry-run: no paid judge was selected, so there was nothing to price.")
+        return 0
+
+    per_judge: dict[str, list] = {name: [] for name in probe}
+    for index in range(args.trials):
+        cache = trial_cache(args.cache_root, index)
+        # Rebuilt per trial so that the cache directory differs and nothing else does.
+        judges = _build_judges(args, cache=cache)
+        print(f"\ntrial {index}: cache {cache}", flush=True)
+        for name, judge in judges.items():
+            judgements = {
+                example_id: judge.judge(context)  # type: ignore[attr-defined]
+                for example_id, context in contexts.items()
+            }
+            trial = summarise_trial(index, scored, judgements)
+            per_judge[name].append(trial)
+            print(
+                f"  {name}: F1 {trial.scores.f1:.3f}, {trial.cached} of "
+                f"{len(judgements)} reply/replies from this trial's cache",
+                flush=True,
+            )
+
+    # The chance range, over the same cases the trials were scored on, so the two widths
+    # in the last block of the report are computed against the same denominator.
+    chance = noise_range(scored, set(contexts), trials=args.null_trials)
+
+    print()
+    print(
+        format_null_run(
+            scored, per_judge, arm=arm, chance=chance,
+            cache_root=args.cache_root, duplicate_prompts=duplicate_prompts,
+        )
+    )
+
+    if args.out:
+        payload = null_run_json(
+            scored, per_judge, arm=arm, tally=tally, chance=chance,
+            extra={
+                "trials": args.trials,
+                "cache_root": str(args.cache_root),
+                "k": args.k,
+                "code_budget": args.code_budget,
+                "doc_budget": args.doc_budget,
+                "max_tokens": args.max_tokens,
+                "retry_max_tokens": args.retry_max_tokens or None,
+                "effort": args.effort,
+                "claim_batch": args.claim_batch if any(
+                    n.startswith("per-claim") for n in probe
+                ) else None,
+                "judges": sorted(probe),
+                "repos": args.repos or "all",
+                "limit": args.limit,
+                "null_trials": args.null_trials,
+                "only_cases": sorted(_expand_only_cases(args.only_cases))
+                if args.only_cases else None,
+            },
+        )
+        dump_json(args.out, payload)
+        print(f"wrote {args.out}")
+    return 0
+
+
+def _add_corpus_flags(parser: argparse.ArgumentParser) -> None:
+    """Which cases a run is about. Shared, so two commands cannot select differently.
+
+    `--only-cases` and `--limit` carry warnings rather than just semantics, and those
+    warnings are the reason this is one function: a null run over a set chosen by id is
+    as unquotable as an eval over one, and a second copy of the flag would be a second
+    copy of the caveat to forget.
+    """
+    parser.add_argument("--review", type=Path, default=Path("review"))
+    parser.add_argument("--data", type=Path, default=Path("data"))
+    parser.add_argument("--clone-root", type=Path, default=Path(".cache/clones"))
+    parser.add_argument("--repos", nargs="*", default=None)
+    parser.add_argument(
+        "--only-cases", nargs="*", default=None, metavar="EXAMPLE_ID",
+        help="score only these `example_id`s; `@file` reads them one per line. For "
+             "probing named cases cheaply -- the 9 recall-costing cases cost ~$0.57 "
+             "against ~$2.84 for all 45. NOT A RESULT: the cases are selected on the "
+             "outcome being measured, so the F1 is unquotable and only the per-case "
+             "change of answer means anything. An unknown id is refused, not skipped",
+    )
+    parser.add_argument("--limit", type=int, default=0, help="smoke test only")
+
+
+def _add_judge_flags(parser: argparse.ArgumentParser) -> None:
+    """Everything that decides what a judge is and what it is asked.
+
+    Shared between `judge-eval` and `judge-null-run` on purpose, and the purpose is
+    narrower than saving typing. Almost every flag here is inside the cache key -- the
+    budgets, the reply ceiling, the effort setting -- so a null run whose defaults had
+    drifted from the eval's would measure the run-to-run width of a harness that produced
+    none of the results the width is quoted against.
+    """
+    parser.add_argument(
+        "--judges", nargs="+", default=["floors"], type=_judge_arg,
+        metavar="{" + ",".join(JUDGE_CHOICES) + ",model:<id>}",
+        help="`floors` is the three that need no key, and is the default; `model` "
+             "needs ANTHROPIC_API_KEY and costs money. `model:<id>` is accepted too, "
+             "because that is the form the reports and score files print -- pasting one "
+             "back should run, not exit",
+    )
+    parser.add_argument(
+        "--lexical-thresholds", nargs="+", type=int, default=[1, 3, 6],
+        help="swept rather than fixed, so the free baseline is reported at its best",
+    )
+    parser.add_argument("--model", default=DEFAULT_JUDGE_MODEL)
+    parser.add_argument(
+        "--k", type=int, default=DEFAULT_K,
+        help="code files shown per document; 5 is where the measured hit rate on the "
+             "45 known-answer cases reaches 60%%, and it is a dimension to sweep",
+    )
+    parser.add_argument(
+        "--code-budget", type=int, default=CODE_BUDGET,
+        help="characters kept per code file after windowing. INSIDE THE CACHE KEY: a "
+             "different value re-pays for every case in the run, so it is a flag rather "
+             "than an edit to the constant. Measured on the 5 budget-cut cases, 9,000 "
+             "brings 2 of them on screen for 1.27x the input tokens and 36,000 brings 4 "
+             "for 2.96x; below 36,000 nothing further is recovered",
+    )
+    parser.add_argument(
+        "--doc-budget", type=int, default=DOC_BUDGET,
+        help="characters kept of the document, head-truncated. ALSO INSIDE THE CACHE "
+             "KEY. Measured on the 9 recall-costing cases: on 3 of them the sentence the "
+             "fixing commit deleted sits beyond 12,000 characters, so the claim under "
+             "test was not in the prompt and no code budget could have answered it",
+    )
+    parser.add_argument(
+        "--claim-batch", type=int, default=DEFAULT_BATCH,
+        help="claims per call for `--judges per-claim`. It changes the rendered prompt, "
+             "so it changes the cache key: a different value re-asks everything. 8 is "
+             "what the pricing diagnostic was read at (168 calls, 3.5x one per-page pass)",
+    )
+    parser.add_argument(
+        "--max-tokens", type=int, default=DEFAULT_MAX_TOKENS,
+        help="reply budget per case, covering REASONING as well as the answer -- 700 "
+             "was enough for the answer and truncated 16 of 45 replies mid-thought",
+    )
+    parser.add_argument(
+        "--retry-max-tokens", type=int, default=0,
+        help="re-ask ONLY the replies that hit --max-tokens, at this higher ceiling. "
+             "Exists because --max-tokens is inside the cache key, so raising it "
+             "re-pays every reply already bought: 4 truncated replies out of 45 cost ~$3 "
+             "to repair that way and well under $1 this way. Sound because a ceiling a "
+             "reply never reached cannot have changed it; 0 disables",
+    )
+    parser.add_argument(
+        "--max-retries", type=int, default=DEFAULT_MAX_RETRIES,
+        help="how many times the SDK re-sends a TRANSIENT failure -- connection errors, "
+             "408, 409, 429, 5xx -- with its own backoff. NOT in the cache key: a reply is "
+             "the same however many attempts delivered it, so this is the one knob here "
+             "that costs nothing to change. Raised from the SDK's 2 because a 168-call run "
+             "died at call 148. It does not make a run crash-proof, and it is not the "
+             "checkpoint -- the reply cache is, which is why that crash cost $0",
+    )
+    parser.add_argument(
+        "--effort", choices=("low", "medium", "high"), default=None,
+        help="how hard the model reasons before answering. Unset means the API default, "
+             "which is what the reported runs use; `low` skipped reasoning entirely and "
+             "cost 49 output tokens against 4,640 on one measured case. A dimension to "
+             "sweep, not a setting to quietly pick -- it changes the cache key",
+    )
+    parser.add_argument(
+        "--max-input-tokens", type=int, default=0,
+        help="refuse to send an arm whose estimated input exceeds this, before any "
+             "call is made; 0 disables. Denominated in tokens because a token budget "
+             "cannot go stale the way a dollar figure can",
+    )
+    parser.add_argument(
+        "--null-trials", type=int, default=200,
+        help="trials of the chance control -- a coin at the corpus positive rate. NOT "
+             "the null RUN's trial count, which is `--trials`: this one is free and draws "
+             "coins, that one is paid and calls the model",
+    )
+
+
 def add_parser(subparsers) -> None:
     cases = subparsers.add_parser(
         "judge-cases",
@@ -562,9 +906,8 @@ def add_parser(subparsers) -> None:
     ev = subparsers.add_parser(
         "judge-eval", help="score judges against the hand-written verdicts"
     )
-    ev.add_argument("--review", type=Path, default=Path("review"))
-    ev.add_argument("--data", type=Path, default=Path("data"))
-    ev.add_argument("--clone-root", type=Path, default=Path(".cache/clones"))
+    _add_corpus_flags(ev)
+    _add_judge_flags(ev)
     ev.add_argument(
         "--arms", nargs="+", choices=ARMS, default=["retrieved"],
         help="oracle = the commit's own code file and nothing else, shape A only -- "
@@ -574,97 +917,49 @@ def add_parser(subparsers) -> None:
              "only arm that covers shape B and the only end-to-end number",
     )
     ev.add_argument(
-        "--judges", nargs="+", default=["floors"], type=_judge_arg,
-        metavar="{" + ",".join(JUDGE_CHOICES) + ",model:<id>}",
-        help="`floors` is the three that need no key, and is the default; `model` "
-             "needs ANTHROPIC_API_KEY and costs money. `model:<id>` is accepted too, "
-             "because that is the form the reports and score files print -- pasting one "
-             "back should run, not exit",
-    )
-    ev.add_argument(
-        "--lexical-thresholds", nargs="+", type=int, default=[1, 3, 6],
-        help="swept rather than fixed, so the free baseline is reported at its best",
-    )
-    ev.add_argument("--model", default=DEFAULT_JUDGE_MODEL)
-    ev.add_argument(
         "--cache", type=Path, default=Path(".cache/judgements"),
         help="keyed by a hash of the rendered context, prompt and model",
     )
-    ev.add_argument(
-        "--k", type=int, default=DEFAULT_K,
-        help="code files shown per document; 5 is where the measured hit rate on the "
-             "45 known-answer cases reaches 60%%, and it is a dimension to sweep",
-    )
-    ev.add_argument(
-        "--code-budget", type=int, default=CODE_BUDGET,
-        help="characters kept per code file after windowing. INSIDE THE CACHE KEY: a "
-             "different value re-pays for every case in the run, so it is a flag rather "
-             "than an edit to the constant. Measured on the 5 budget-cut cases, 9,000 "
-             "brings 2 of them on screen for 1.27x the input tokens and 36,000 brings 4 "
-             "for 2.96x; below 36,000 nothing further is recovered",
-    )
-    ev.add_argument(
-        "--doc-budget", type=int, default=DOC_BUDGET,
-        help="characters kept of the document, head-truncated. ALSO INSIDE THE CACHE "
-             "KEY. Measured on the 9 recall-costing cases: on 3 of them the sentence the "
-             "fixing commit deleted sits beyond 12,000 characters, so the claim under "
-             "test was not in the prompt and no code budget could have answered it",
-    )
-    ev.add_argument(
-        "--claim-batch", type=int, default=DEFAULT_BATCH,
-        help="claims per call for `--judges per-claim`. It changes the rendered prompt, "
-             "so it changes the cache key: a different value re-asks everything. 8 is "
-             "what the pricing diagnostic was read at (168 calls, 3.5x one per-page pass)",
-    )
-    ev.add_argument(
-        "--max-tokens", type=int, default=DEFAULT_MAX_TOKENS,
-        help="reply budget per case, covering REASONING as well as the answer -- 700 "
-             "was enough for the answer and truncated 16 of 45 replies mid-thought",
-    )
-    ev.add_argument(
-        "--retry-max-tokens", type=int, default=0,
-        help="re-ask ONLY the replies that hit --max-tokens, at this higher ceiling. "
-             "Exists because --max-tokens is inside the cache key, so raising it "
-             "re-pays every reply already bought: 4 truncated replies out of 45 cost ~$3 "
-             "to repair that way and well under $1 this way. Sound because a ceiling a "
-             "reply never reached cannot have changed it; 0 disables",
-    )
-    ev.add_argument(
-        "--max-retries", type=int, default=DEFAULT_MAX_RETRIES,
-        help="how many times the SDK re-sends a TRANSIENT failure -- connection errors, "
-             "408, 409, 429, 5xx -- with its own backoff. NOT in the cache key: a reply is "
-             "the same however many attempts delivered it, so this is the one knob here "
-             "that costs nothing to change. Raised from the SDK's 2 because a 168-call run "
-             "died at call 148. It does not make a run crash-proof, and it is not the "
-             "checkpoint -- the reply cache is, which is why that crash cost $0",
-    )
-    ev.add_argument(
-        "--effort", choices=("low", "medium", "high"), default=None,
-        help="how hard the model reasons before answering. Unset means the API default, "
-             "which is what the reported runs use; `low` skipped reasoning entirely and "
-             "cost 49 output tokens against 4,640 on one measured case. A dimension to "
-             "sweep, not a setting to quietly pick -- it changes the cache key",
-    )
-    ev.add_argument(
-        "--max-input-tokens", type=int, default=0,
-        help="refuse to send an arm whose estimated input exceeds this, before any "
-             "call is made; 0 disables. Denominated in tokens because a token budget "
-             "cannot go stale the way a dollar figure can",
-    )
-    ev.add_argument("--repos", nargs="*", default=None)
-    ev.add_argument(
-        "--only-cases", nargs="*", default=None, metavar="EXAMPLE_ID",
-        help="score only these `example_id`s; `@file` reads them one per line. For "
-             "probing named cases cheaply -- the 9 recall-costing cases cost ~$0.57 "
-             "against ~$2.84 for all 45. NOT A RESULT: the cases are selected on the "
-             "outcome being measured, so the F1 is unquotable and only the per-case "
-             "change of answer means anything. An unknown id is refused, not skipped",
-    )
-    ev.add_argument("--limit", type=int, default=0, help="smoke test only")
-    ev.add_argument("--null-trials", type=int, default=200)
     ev.add_argument(
         "--dump-prompt", action="store_true",
         help="print one rendered prompt, to check by eye that no diff leaked into it",
     )
     ev.add_argument("--out", type=Path, default=None, help="also write JSON")
     ev.set_defaults(func=_cmd_eval)
+
+    null = subparsers.add_parser(
+        "judge-null-run",
+        help="judge the same input several times and report how far the answer moves",
+    )
+    _add_corpus_flags(null)
+    _add_judge_flags(null)
+    null.add_argument(
+        "--arm", choices=ARMS, default="retrieved",
+        help="one arm, not several. A second arm multiplies the bill by a factor that "
+             "buys a different question rather than a better answer to this one, and the "
+             "width every other result needs is the width on the arm they were measured on",
+    )
+    null.add_argument(
+        "--trials", type=int, default=DEFAULT_TRIALS,
+        help=f"how many times to judge the same input. Default {DEFAULT_TRIALS}, which is "
+             "a FLOOR rather than a recommendation: two trials give one comparison and "
+             "cannot tell a narrow width from a lucky pair, three let a third draw "
+             "contradict the first two. Raising it later re-reads what is already banked "
+             "and pays only for the new trials. Fewer than 2 is refused",
+    )
+    null.add_argument(
+        "--cache-root", type=Path, default=Path(".cache/null-run"),
+        help="one directory PER TRIAL underneath this, which is how the shared reply "
+             "cache is bypassed. `.cache/judgements` is keyed on content, so a null run "
+             "over it serves every trial after the first off disk and reports a width of "
+             "0.000 from a run that made no calls -- clean, and wrong. The per-trial "
+             "directories also make a dead run resumable and a re-read free",
+    )
+    null.add_argument(
+        "--dry-run", action="store_true",
+        help="price the whole run -- per trial and multiplied out -- and send nothing. "
+             "The same counting-stub discipline that priced the stage-2d reranker arm to "
+             "zero error before a 55-hour job started",
+    )
+    null.add_argument("--out", type=Path, default=None, help="also write JSON")
+    null.set_defaults(func=_cmd_null_run)

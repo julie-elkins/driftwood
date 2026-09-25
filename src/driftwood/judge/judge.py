@@ -49,6 +49,7 @@ __all__ = [
     "DEFAULT_MAX_RETRIES",
     "DEFAULT_MAX_TOKENS",
     "MAX_NONSTREAMING_MAX_TOKENS",
+    "PAID_PREFIXES",
     "AlwaysJudge",
     "AnthropicJudge",
     "Judge",
@@ -56,7 +57,26 @@ __all__ = [
     "LexicalJudge",
     "PriorJudge",
     "SYSTEM_PROMPT",
+    "is_paid",
 ]
+
+# The judges that cost money, by the prefix of the name they report themselves under. A
+# list rather than `startswith("model:")` spelled inline, because that test was in three
+# places and the per-claim judge is the second paid arm: a spend preflight that silently
+# does not recognise a paid judge is the one bug in this package that cannot be caught by
+# reading the output afterwards.
+#
+# It lives here, next to the classes whose names it matches, rather than in the CLI where
+# it started. Two callers need it now -- the eval's spend preflight and stage 4's harness
+# control, which asks the complementary question of which judges CANNOT vary between two
+# identical runs -- and a second copy of a prefix list is how the two answers drift apart
+# without either one looking wrong.
+PAID_PREFIXES = ("model:", "per-claim")
+
+
+def is_paid(name: str) -> bool:
+    """Does a judge with this name send a request somebody is billed for?"""
+    return name.startswith(PAID_PREFIXES)
 
 # The reply budget, and it is NOT the size of the answer. It was 700, sized by reading
 # the prompt -- a verdict, a quoted claim, two sentences -- and 700 is about four times
