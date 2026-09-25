@@ -71,6 +71,14 @@ secrets.*
 # being outward-facing, which is the same reason `.claude/` and `.idea/` are here.
 .DS_Store
 
+# Run logs from the long measurement jobs. The 2d(c) reranker arm was three overnight
+# sessions and left two of these in the repo root, which is what prompted the entry.
+# Ignored on the same distinction the block below draws: a log is what the run SAID, and
+# `data/scores/*.json` is what it MEASURED. The log is also the less trustworthy of the
+# two -- it reports rounded console tables, and on a resumed run its early lines describe
+# a state the finished artefact has already superseded. Nothing downstream reads one.
+*.log
+
 # Never ignored, and worth saying why:
 #   review/*.md              -- the hand labels. Irreplaceable; every number
 #                               downstream is measured against them.
