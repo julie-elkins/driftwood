@@ -630,6 +630,12 @@ ways, and has not once been observed at a magnitude larger than its own noise.**
 more labelled documents, not a better model — which is what makes 2d (a reranker over `lexical`'s
 top 20, scored on both corpora) the next thing worth building and `bge-m3` still not worth buying.
 
+*Superseded in one clause, by stage 2d below.* "Not once at a magnitude larger than its own noise"
+was true of both corpora available here and is no longer true: run on the mined corpus, the
+reranker loses readably on pydantic's four metrics and on the R@1 and MRR of two more repos. The
+rest of the paragraph stood up — it was the extra labelled documents that made the magnitude
+legible, not a bigger model.
+
 Two silent defects in already-shipped code surfaced the first time the new command printed a
 table, both in the results footer: it named the module's default trial count rather than the
 run's, so a low-trial run claimed forty trials and understated its own noise range; and it
@@ -830,15 +836,101 @@ which the ceiling table already ruled arithmetically incapable of showing a gain
 direction. requests' MRR 1.00 → 0.57 is legible at this n precisely because n is 3 — it is two of
 three queries demoted out of rank 1, to ranks 2 and 5. That is a sentence about three documents.
 
-**So the claim this section supports is "not measured yet", not "cross-encoder reranking does not
-work here."** The corpus that could answer costs 49.7 hours and has not been run. There are four
-ways to make it cheaper and every one of them changes what the resulting number means, which is why
-none was taken quietly: capping chunks per side is truncation, and truncation was already measured
-on the dense arm at 30–45% of MRR; dropping `top_n` to 10 halves the bill and also halves the
-headroom, moving flask and pydantic into their own noise widths; a long-context reranker with an
-8192-token window would be roughly 10× cheaper net, but the prediction registered before this stage
-named an ms-marco-class model and swapping it is a different experiment rather than the same one
-run faster; mean-pooling instead of max saves nothing at all, since every pair is scored either way.
+**So on this corpus the claim was "not measured yet", not "cross-encoder reranking does not work
+here."** The corpus that could answer cost 49.7 hours. There were four ways to make it cheaper and
+every one of them changes what the resulting number means, which is why none was taken: capping
+chunks per side is truncation, and truncation was already measured on the dense arm at 30–45% of
+MRR; dropping `top_n` to 10 halves the bill and also halves the headroom, moving flask and pydantic
+into their own noise widths; a long-context reranker with an 8192-token window would be roughly 10×
+cheaper net, but the prediction registered before this stage named an ms-marco-class model and
+swapping it is a different experiment rather than the same one run faster; mean-pooling instead of
+max saves nothing at all, since every pair is scored either way.
+
+The 49.7 hours were then spent instead.
+
+### The mined corpus was run, and the one gain in the table is the label rule read back to itself
+
+Three overnight sessions on the laptop, 32.5M forward passes, **55 hours of wall-clock against 49.7
+priced** — the price was unique passes at 164/s and the run held 157–161/s, which is the gap.
+Artefacts:
+`data/scores/retrieval-rerank-top20-no-pydantic.json` and `retrieval-rerank-top20-pydantic.json`.
+Every delta is a rerank row against **its own base row**, with that repo's shuffled-floor noise
+width deciding what counts as readable. Per repo; nothing pooled. `ks` is {1, 5, 10}, all below
+`top_n`, so every cell below is one that can actually move.
+
+`rerank(lexical@20)` against `lexical`, then the same pair with the mining rule's evidence tokens
+redacted from the document — the ablated row, and the defensible one, because the base ranker is
+ablated too so the reordered head is the ablated head:
+
+| repo | noise width R@1 / R@5 / R@10 / MRR | ΔR@1 | ΔR@5 | ΔR@10 | ΔMRR |
+|---|---|---|---|---|---|
+| psf/requests | 0.107 / 0.236 / 0.349 / 0.133 | −0.096 | −0.082 | −0.094 | −0.065 |
+| psf/requests *ablated* | | −0.061 | +0.003 | −0.063 | −0.044 |
+| encode/httpx | 0.062 / 0.124 / 0.168 / 0.138 | **−0.117** | −0.081 | −0.147 | **−0.157** |
+| encode/httpx *ablated* | | **−0.112** | −0.078 | −0.100 | **−0.167** |
+| pallets/flask | 0.063 / 0.096 / 0.077 / 0.078 | **−0.141** | −0.092 | −0.035 | **−0.157** |
+| pallets/flask *ablated* | | **−0.107** | −0.053 | −0.030 | **−0.116** |
+| pydantic/pydantic | 0.025 / 0.045 / 0.060 / 0.056 | **−0.071** | −0.031 | −0.052 | **−0.102** |
+| pydantic/pydantic *ablated* | | **−0.091** | **−0.085** | **−0.087** | **−0.142** |
+| fastapi/fastapi | 0.012 / 0.033 / 0.037 / 0.027 | **−0.088** | **+0.052** | **+0.037** | **+0.035** |
+| fastapi/fastapi *ablated* | | **−0.174** | +0.028 | +0.002 | **−0.053** |
+
+Bold is readable — the delta exceeds that repo's own noise width. **On the ablated row there is not
+one readable gain, on any repo, on any metric.** pydantic loses readably on all four, and pydantic
+is the repo that mattered: the ceiling table names it as the only one whose headroom (0.162)
+comfortably exceeds its noise (0.060), so it is the one repo where the instrument had room to
+register a win. Its `lexical-ablated` R@10 came in at 0.570 against the ceiling table's 0.57, so
+that measurement reproduced.
+
+**The prediction, graded without editing it.** It said *no readable gain on any of the five repos*.
+It holds on the ablated row, 5 of 5. It is **falsified on the non-ablated row**, where fastapi gains
+R@5 +0.052 against a 0.033 width and MRR +0.035 against 0.027 (R@10 +0.037 against 0.037 is 1.02×
+and should not be leaned on alone). The prediction did not say which row, so the honest grade is
+*held on the row that counts, falsified on the row that does not* — recorded that way rather than
+resolved in its own favour.
+
+**That split is the finding, not the bookkeeping.** fastapi's gain exists before ablation and
+vanishes after it: R@5 +0.052 → +0.028 (inside noise), R@10 +0.037 → +0.002 (gone), MRR +0.035 →
+−0.053 (a readable loss). The gain lives in the evidence tokens the mining rule used to build the
+label. Stage 2d put that same question to term frequency as its load-bearing prediction — *does the
+ablated gap widen?* — and term frequency passed, never widening it by more than 0.002. The
+cross-encoder fails it, worst on the two repos where it looked best. `lexical` minus
+`lexical-ablated`, base gap → rerank gap:
+
+| repo | R@10 gap | MRR gap |
+|---|---|---|
+| psf/requests | +0.057 → +0.025 | +0.025 → +0.004 |
+| encode/httpx | +0.038 → −0.008 | +0.012 → +0.022 |
+| pallets/flask | +0.027 → +0.022 | +0.019 → −0.022 |
+| pydantic/pydantic | +0.020 → **+0.054** | +0.018 → **+0.057** |
+| fastapi/fastapi | +0.029 → **+0.065** | +0.021 → **+0.109** |
+
+**The cross-encoder is more dependent on the label rule's own evidence tokens than the IDF-weighted
+tokeniser it is reranking** — 2.7× on pydantic's R@10, 5.2× on fastapi's MRR. An ablation built
+before the model is the only thing standing between that non-ablated fastapi row and a headline.
+
+Three further things the tables say that nothing predicted:
+
+- **R@1 collapses, and it is the largest effect in the stage.** Readable loss on 4 of 5 repos in
+  both rows; fastapi ablated is −0.174 against a 0.012 width, 14× the noise. Where the model helps
+  at all it helps at k=5, by pulling misses up while wrecking a rank-1 the base ranker already had.
+  For this project's actual use — a drift finding is read at rank 1 — that is the worst available
+  trade.
+- **The ceiling table's "impossible" verdict held, and its scope is narrower than it reads.**
+  requests shows nothing readable in either row, exactly as the arithmetic said. httpx shows
+  readable *losses*, because headroom caps how large a **gain** can be and says nothing about how
+  far a ranker can fall. "Cannot produce a readable result" was never the claim; "cannot produce a
+  readable gain" was.
+- **The price was exact.** The stub count predicted 24,697,850 unique passes for pydantic; the
+  finished cache holds 24,697,850. A harness run with a counting stub in place of the model priced a
+  42-hour job to zero error, for free, before anything was spent.
+
+So the sentence this stage set out to test is now supported four independent ways rather than three:
+**on this task, more labelled documents buy resolution and bigger models do not.** Dense embeddings
+lost 5/5 on mined labels and 3/3 on hand labels; term frequency bought one readable repo of five for
+free; a cross-encoder second pass loses on the defensible row of all five, and its single apparent
+gain is traceable to the label rule. No further escalation of model class is worth buying on this
+corpus without first enlarging the corpus.
 
 ### Two bugs the design of this arm was shaped to avoid, one of which was nearly shipped
 
@@ -1358,7 +1450,7 @@ only signal in this project that a high-precision mode exists at all.
 | 2b · Retrieval — embeddings, chunked and cached | **built, measured, lost 5/5** |
 | 2c · Hand-labelled docs, candidates = the whole tree — the ground truth 2b needs | **built, 18 docs labelled, split verdict** |
 | 2d · Term frequency in `Lexical`, one lever, nested | **built, measured, readable on 1 repo of 5** |
-| 2d · Cross-encoder reranker over `lexical`'s top 20 | **built, measured on 2c (lost 3/3, all inside noise); mined corpus priced at 49.7 h, not run** |
+| 2d · Cross-encoder reranker over `lexical`'s top 20 | **DONE — 32.5M passes, 55 h. No readable gain on the ablated row of any of the 5 repos; the one non-ablated gain traces to the label rule** |
 | 3 · The judge — does a document make a false claim, at one commit | **built, measured, lost to every free floor** |
 | 4 · Null-run harness — same input twice, to establish the noise floor | designed |
 | 5 · GitHub App + CI eval gate | designed |
@@ -1442,11 +1534,21 @@ uv run driftwood retrieve-eval data/mine.jsonl --rerank-model --rerank-device mp
 
 `--rerank-model` bare means `cross-encoder/ms-marco-MiniLM-L6-v2`; `--rerank-top-n` sets the cutoff
 and is in the row name, so two cutoffs are two rows rather than one overwritten one. **The second
-command is a 49.7-hour run on the mined corpus** — the per-repo prices are in the table above, and
-`--repos` narrows it. Pair scores cache under `.cache/rerank`, keyed on the text of both sides plus
-the model and the chunking, and the file is written after every repo, so an interrupted run resumes
-where it stopped rather than restarting. `--rerank-batch` defaults to 128; 64 measured faster than
-256 on mps, which is the opposite of the usual direction.
+command is the 49.7-hour priced run on the mined corpus, which took 55 hours** — the per-repo
+prices are in the table above, and `--repos` narrows it, which is how pydantic was run on its own.
+Pair scores cache under `.cache/rerank`, keyed on the text of both sides plus the model and the
+chunking, and the file is written both after every repo **and on a 15-minute clock**, so an
+interrupted run resumes where it stopped rather than restarting. The clock matters more than the
+per-repo save: pydantic is 76% of the bill inside one split, so a between-repos checkpoint lands
+immediately before the only place it was needed, and a run that died 40 hours into that split had
+banked the four cheap repos and not one pydantic pair. `--rerank-batch` defaults to 128; 64 measured
+faster than 256 on mps, which is the opposite of the usual direction.
+
+Two copies of that command must not run at once. Both load the same cache and each writes the whole
+store back over the other's, so whichever saves last silently discards the other's interval — the
+atomic rename means there is no corrupt file and therefore no symptom, only a pair count growing
+more slowly than the GPU time says it should. `scripts/run-pydantic-rerank.sh` refuses to be the
+second copy.
 
 Stage 3 likewise runs free by default. `judge-cases` prints the class balance and the floors and
 touches neither a clone nor a model; `judge-eval` with no flags runs the three judges that need no
