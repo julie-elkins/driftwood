@@ -14,8 +14,10 @@ What none of them has is a win: every judge arm lost to a free floor, and that i
 rather than buried. The null run then took most of this file's margins with it — running the same
 command three times with nothing changed moves F1 by **0.160**, which is wider than every gap
 stage 3 ever reported, including the losses. What survives is accuracy against a constant, where
-the judge is 21 points *behind* against a run-to-run width of 2.9 points. Everything below is a
-measurement, not a projection — where a number is unreliable, this README says so.
+the judge is 21 points *behind* against a run-to-run width of 2.9 points — measured on 70 cases,
+and a batch labelled since has grown that arm to 95 without the judge having been re-run on it.
+Everything below is a measurement, not a projection — where a number is unreliable, this README
+says so, and where a number belongs to a corpus that has since grown, it names the corpus.
 
 That line read **"stage 1 of 5. The retrieval and agent layers are not [built]"** until
 2026-09-25 — four stages after it stopped being true, in the front matter of a repository whose
@@ -1124,18 +1126,25 @@ Two claims this pre-empts, both of which I would otherwise have been able to mak
 - "Our judge scores F1 0.40." That is worse than a stuck switch, and against the accuracy floor
   alone it would have read as a respectable result.
 
-### A floor is not a constant of nature — 25 more labels moved both of them
+### A floor is not a constant of nature — and it does not even move in one direction
 
-The corpus grew from 125 verdicts to 150 on 2026-09-20: a shape-A batch of 25, all of them
-scoreable, none held out. Scoreable went 105 → 130 and every floor above moved with it.
+The corpus grew from 125 verdicts to 150 on 2026-09-20, and to 175 on 2026-09-25: two shape-A
+batches of 25, all 50 scoreable, none held out. Scoreable went 105 → 130 → 155 and every floor above
+moved each time.
 
-| | 105 scoreable | 130 scoreable |
-|---|---|---|
-| positive rate | 28.6% | 26.2% |
-| `always-not-false` accuracy — the majority floor | 71.4% | **73.8%** |
-| `always-false` F1 — the F1 floor | 0.444 | **0.415** |
-| chance F1, 200 trials, p5–p95 | 0.18–0.39 | **0.16–0.36** |
-| best free judge | `lexical-absence(>=3)` 0.45 | `lexical-absence(>=3)` **0.44** |
+| | 105 scoreable | 130 scoreable | 155 scoreable |
+|---|---|---|---|
+| positive rate | 28.6% | 26.2% | **29.7%** |
+| `always-not-false` accuracy — the majority floor | 71.4% | 73.8% | **70.3%** |
+| `always-false` F1 — the F1 floor | 0.444 | 0.415 | **0.458** |
+| chance F1, 200 trials, p5–p95 | 0.18–0.39 | 0.16–0.36 | **0.21–0.39** |
+| best free judge | `lexical-absence(>=3)` 0.45 | `lexical-absence(>=3)` 0.44 | `lexical-absence(>=3)` **0.47** |
+
+**Every row went down and then back up, and two of them ended past where they started.** That is the
+stronger version of this section's point: the floors do not drift in a direction that a reader could
+mentally extrapolate, they wander with whatever the last batch happened to contain. A number pinned
+to "the floor" in any document outside this table is wrong twice over — stale, and stale in an
+unguessable direction.
 
 **This is why the floors are asserted as literals in the tests rather than recomputed from the
 corpus.** Seven assertions failed the moment the sheet was filled in, which is the control working:
@@ -1149,20 +1158,24 @@ Two consequences worth stating plainly rather than leaving for a reader to work 
 **Every stage-3 result below was measured on the 105-case corpus, against the 0.444 floor, and is
 not comparable to anything scored from here on.** The score files say so themselves —
 `provenance.corpus.cases` is `125` in each — which is the reason that field exists. The free arms
-have been re-scored (`data/scores/judge-floors-150.json`); the model arms have not, and re-scoring
-them is not free, though it is cheap: judgements cache by content, so the 105 old cases cost
-nothing and only the 25 new ones are billed, roughly a fifth of the original arm.
+have been re-scored twice (`data/scores/judge-floors-150.json`, then
+`data/scores/judge-floors-175.json`); the model arms have not, and re-scoring them is not free,
+though it is cheap: judgements cache by content, so the old cases cost nothing and only the new ones
+are billed, roughly a fifth of the original arm per batch.
 
-**The margin on the claim this section exists to block got narrower, and it still holds.** "A judge
-at F1 0.40 is worse than a stuck switch" was true by 0.044 and is now true by 0.015. One more batch
-of labels in the same direction would make it false — not because the judge improved, but because
-the floor came down to meet it. That is the failure mode this whole section is built to catch, and
-it is now 0.015 away, so the sentence needs re-checking after every batch rather than quoting.
+**The margin on the claim this section exists to block got narrower, then widened past where it
+started.** "A judge at F1 0.40 is worse than a stuck switch" was true by 0.044, then by 0.015, and
+is now true by **0.058**. This paragraph used to end by predicting the danger: *"one more batch of
+labels in the same direction would make it false — not because the judge improved, but because the
+floor came down to meet it."* One more batch arrived and went the other way. The prediction is kept
+rather than edited, and it was wrong in the direction of having been too pessimistic, which is the
+only comfortable way to be wrong and still worth recording as a miss.
 
-**Stage 4 has since retired this paragraph, and the retirement is worth more than the paragraph
-was.** The run-to-run F1 width on the seeded arm is 0.160, so a 0.015 margin was never a difference
-this project could see — re-checking it after every batch would have been re-checking noise. The
-claim it exists to block is still true, but the evidence for it is the accuracy gap, not this.
+**Stage 4 has since retired this whole line of argument, and the retirement is worth more than the
+argument was.** The run-to-run F1 width on the seeded arm is 0.160, so neither 0.015 nor 0.058 is a
+difference this project can see — re-checking the margin after every batch was re-checking noise,
+and watching it recover was watching noise recover. The claim it exists to block is still true, but
+the evidence for it is the accuracy gap, not any of these three numbers.
 
 No prediction was registered for these 25 before they were labelled, which breaks the rule this
 project applies everywhere else. It is recorded here rather than papered over: the 150/130 numbers
@@ -1178,6 +1191,13 @@ A, so the reviewer had a code file in front of her. Every `unclear` in the whole
 shape-B sheet, where the commit touched documentation only and there is no code side to read. A
 test now asserts that, so a future all-shape-A batch producing `unclear` cases is a finding rather
 than a shrug.
+
+**That one was then confirmed prospectively, which is rarer here than it should be.** Batch 04 was
+drawn from a different mining version and a near-inverted repo mix, its zero-`unclear` outcome was
+registered as a prediction before a verdict was written, and it came in at zero — 0 of 95 on shape A
+against 20 of 80 on shape B. The competing explanation offered at registration time was that
+`unclear` tracked reviewer familiarity with `flask` and `requests`; a batch that is 48% `pydantic`
+kills it. Shape is the mechanism.
 
 ### The retrieval ceiling, measured rather than assumed
 
@@ -1286,6 +1306,25 @@ regenerable *in principle* is not the same as present. Three details are deliber
   is what a stale freeze looks like.
 - **Each record keeps a `frozen_from`** naming the mining run that produced it. That is the field
   needed to explain a case, and it is exactly what a naive concatenation drops.
+
+`judge-freeze` is re-run whenever a sheet is labelled, so the file has gone 125 → 150 → **175
+records**. Skipping it is the failure this section describes, arriving quietly: the sheet is tracked,
+the labels are tracked, and the label versions they join to are not.
+
+**`frozen_from` was not sufficient to diagnose the batch-04 drift-rate finding, which is worth
+recording because it looked as though it would be.** Split by `frozen_from` alone, the older 70
+shape-A cases give `labels.jsonl` 6 of 22 (27%) and `labels-v10.jsonl` 11 of 48 (23%) — no effect at
+all. The variable that separates them is whether the case *is still minable today*, i.e. present in
+the current `data/labels-v11.jsonl` pool, and the two cut across each other: all 14 of the drift-free
+cases are v1-frozen, but 8 other v1-frozen cases are in the current pool and carry 6 `drift` between
+them.
+
+So the finding is not "old cases are different". It is **"cases the miner no longer produces are
+different"**, and the direction is that the miner stopped producing a group that was 0 for 14 on real
+drift. That is the first evidence in this project that the mining rule improved across versions in a
+way the eval could see, and it was found by accident while explaining something else. A provenance
+field naming the run is necessary for this and not sufficient; reachability from the *current* pool is
+the discriminating fact, and nothing in the record stores it.
 
 ### The model arm, and it is a loss
 
@@ -1678,6 +1717,104 @@ corpus on the thing being measured.
    alternative. **This is the only one of the five that names a mechanism, which is the class this
    project has got wrong every previous time.**
 
+#### Graded: one of four held, and the misses are a class this project had not failed at before
+
+The sheet came back **`drift` 12, `cosmetic` 6, `new` 5, `unrelated` 2, `unclear` 0.**
+
+| | prediction | result | |
+|---|---|---|---|
+| 1 | `drift` 4–9 of 25, point 6 | **12** | **FALSIFIED** |
+| 2 | zero `unclear` | **0**, so 0 of 95 on shape A | **CONFIRMED** |
+| 3 | `cosmetic` still largest, ≥ 8 | **6**, and `drift` is now the largest class | **FALSIFIED**, both clauses |
+| 4 | positive rate stays 23–27%, no floor moves > 0.03 F1 | **30.5%**, `always-false` +0.08 | **FALSIFIED** |
+| 5 | one batch does not make the F1 comparison readable | needs a paid re-run | not yet gradeable |
+
+Four previous rounds in this file failed at predicting *the model*. These three failed at predicting
+*the corpus* — the part that is arithmetic on labels, with no model in it anywhere. That is worse,
+not better, and the reason is in every one of the three: all of them extrapolated the 24.3% `drift`
+rate on the existing 70 as if the undrawn pool were exchangeable with the drawn one. It is not, and
+the next subsection shows what the difference actually was.
+
+**Prediction 1's band was badly built as well as wrong.** 4–9 covers only 82.9% of the binomial at
+p = 0.243, n = 25, so a perfectly correct model of the corpus would have failed it about one time in
+six. A real 95% band is 2–10. Registering an interval narrower than the interval claimed is its own
+defect, independent of the answer — and 12 falsifies the honest band too, so the miss is not an
+artefact of the sloppiness.
+
+**Prediction 4 is the consequential one, because it moved a floor in the direction that hurts.**
+`judge-eval --judges floors` on the 95-case seeded arm (`data/scores/judge-floors-175-seeded.json`):
+
+| judge | F1, 70 cases | F1, 95 cases | accuracy, 95 |
+|---|---|---|---|
+| `always-false` | 0.39 | **0.468** | 30.5% |
+| `always-not-false` | 0.00 | 0.00 | **69.5%** |
+| `lexical-absence(>=1)` | 0.41 | 0.479 | 35.8% |
+| `lexical-absence(>=3)` | 0.42 | 0.487 | 37.9% |
+| `lexical-absence(>=6)` | 0.41 | **0.490** | 47.4% |
+
+The best free floor went 0.42 → 0.490, which moves the bar **away** from the judge rather than
+toward it. So the batch drawn to make the F1 comparison readable made the thing being compared
+against harder to reach; whether the net effect is readable at all is prediction 5, and it is
+unresolved. Two consequences to apply immediately:
+
+- **The surviving accuracy comparison is now stale on one side.** "51.4–54.3% against 75.7%" is a
+  70-case sentence. The majority floor on 95 is **69.5%**, six points lower, and the judge's
+  accuracy on 95 is *not measured* — 25 of its cases have never been judged. Do not pair the old
+  numerator with the new denominator; that is the corpus-mismatch error this file warns about two
+  sections up, and it would flatter the judge by six points.
+- **The size of the judge's F1 deficit is now unknown, not merely unreadable.** It is tempting to
+  put the best trial's 0.320 next to the new 0.490 and call the gap 0.17, i.e. finally outside the
+  0.160 width — and that would be the same corpus mismatch as the bullet above, in the flattering
+  direction this time. 0.320 is a 70-case number and 0.490 is a 95-case one. What the floor rising
+  does establish is that the bar moved away from the judge, so *if* the re-run reproduces anything
+  like the old level, the gap is larger than the one that was unreadable. That is a reason to buy the
+  re-run, not a result from having bought it.
+
+#### Where the doubling came from, and it is mostly the mining pool rather than the labeller
+
+12 of 25 against a 24.3% base rate is p = 0.0084, which is too unlikely to leave unexplained. Two
+candidates were ruled out first. **Not the repo mix:** every repo in the batch came in above its own
+prior rate — `pydantic` 5/12 against 25%, `flask` 3/5 against 23%, `httpx` 3/4 against 50%,
+`fastapi` 1/4 against 0% — so the `pydantic`-heavy draw is not carrying it. **Not the mining basis:**
+`doc_and_code_both_modified_sharing_identifier` on both sides, the identical string.
+
+What it mostly is: **the old 70 are not all from the pool this batch was drawn from.** 14 of those 70
+shape-A cases do not exist in `data/labels-v11.jsonl` at all, and those 14 contain **zero** `drift`
+— itself unlikely at p = 0.0063, so they are genuinely drift-poor rather than a small sample. They
+were dragging the "old" rate down. Splitting the comparison so both sides come from the same pool:
+
+| | n | `drift` | rate |
+|---|---|---|---|
+| old shape-A cases present in v11 | 56 | 17 | 30.4% |
+| old shape-A cases absent from v11 | 14 | 0 | **0.0%** |
+| batch 04, drawn from v11 | 25 | 12 | 48.0% |
+
+**Fisher exact on the like-for-like pair, 17/56 against 12/25: p = 0.14.** So the residual gap is
+not distinguishable from chance, and the headline doubling is largely an artefact of comparing a pool
+that still contains no-longer-minable cases against one drawn entirely from the current pool. The
+rule this repo already had — score per `label_basis`, never blended — did not catch it, because the
+basis string is identical on both sides. Nor does `frozen_from`, which cuts across the split rather
+than along it; the reproducibility section works through why. **The blending that matters here is not
+by basis and not by mining version, but by whether the current miner still reaches the case**, and
+that is a new failure mode for the never-blend rule.
+
+**What cannot be ruled out from the labels alone: anchoring.** These 25 verdicts were written in a
+session whose stated reason for drawing them was that the positive class was too small. A labeller
+who knows that is under pressure toward `drift`, and no amount of arithmetic on the resulting labels
+can detect it — the labels are the only ground truth there is. The composition finding above makes
+it a smaller worry than the raw p = 0.0084 suggested, and it does not dissolve it. **The only clean
+test is a fresh blind re-label of a mixed sample of old and new cases**, and no label here has been
+revised, because revising a label after seeing a score turns the measurement into a mirror.
+
+#### What prediction 5 costs, which is less than the first run did
+
+The 95-case null run is a purchase, so it is priced rather than made. Each trial directory under
+`.cache/nr-paid/trial-NN` holds exactly 70 replies, the cache is keyed on the rendered prompt, and
+adding cases does not change any existing case's prompt. So a re-run at `--trials 3` on the enlarged
+arm bills **25 new replies per trial, 75 in total** — about a third of the original 210 — and the
+other 210 are cache hits. That is the designed behaviour of the per-trial cache dirs rather than a
+trick, and it is the cheapest paid result this project has left to buy. Nothing about it is run here.
+
 ### The same gap, found independently on unrelated data
 
 [llm-eval-validity](https://github.com/julie-elkins/llm-eval-validity) audits a different
@@ -1716,8 +1853,10 @@ instrument is consistent.
 | 2c · Hand-labelled docs, candidates = the whole tree — the ground truth 2b needs | **built, 18 docs labelled, split verdict** |
 | 2d · Term frequency in `Lexical`, one lever, nested | **built, measured, readable on 1 repo of 5** |
 | 2d · Cross-encoder reranker over `lexical`'s top 20 | **DONE — 32.5M passes, 55 h. No readable gain on the ablated row of any of the 5 repos; the one non-ablated gain traces to the label rule** |
-| 3 · The judge — does a document make a false claim, at one commit | **built, measured, lost to every free floor — and stage 4 then showed the F1 losses are inside the run-to-run width. The loss that survives is accuracy, 21 points behind a constant** |
+| 3 · The judge — does a document make a false claim, at one commit | **built, measured, lost to every free floor — and stage 4 then showed the F1 losses are inside the run-to-run width. The loss that survives is accuracy, 21 points behind a constant on 70 cases. The seeded arm is now 95 cases and the judge has not been re-run on it, so that gap is stale on its floor side** |
 | 4 · Null-run harness — same input twice, to establish the noise floor | **built and measured both halves. Control: exactly 0.000 on five free judges, 130/130 stable. Paid: F1 width 0.160 over 3 trials of the seeded arm, which is wider than every margin in this file. 4 of 5 pre-registered predictions held; the one that named a mechanism failed** |
+| 4b · The label batch the width argued for — 25 shape-A cases | **labelled. 1 of 4 gradeable predictions held, and the three misses are about the corpus rather than the model. Every free floor rose: best free judge 0.42 → 0.490 on the seeded arm, so the bar moved away from the judge** |
+| 4c · Re-run the paid null run on the enlarged 95-case arm | **priced, not bought — 75 new replies, about a third of the original, because 70 of 95 are cache hits in each trial directory. This is the only thing that grades prediction 5 and the only thing that re-reads the surviving accuracy gap** |
 | 5 · GitHub App + CI eval gate | **designed, and deliberately NOT built — a decision, not a gap.** A CI gate that blocks a merge needs a judge whose error rate is known and better than a constant. This one's is known and is not, so the gate would either block correct docs or pass silently, and deploying it would convert a measured loss into an unmeasured one |
 
 Stage 3 is not architecture on faith. Version-support claims turned out to be a class that

@@ -325,12 +325,12 @@ class TestTheCorpusIsSelfContained:
 
         cases, tally = load_cases(REPO_ROOT / "review", lonely)
 
-        assert tally["verdicts"] == 150
-        assert tally["cases"] == 150, (
+        assert tally["verdicts"] == 175
+        assert tally["cases"] == 175, (
             "a checkout with only the tracked files must rebuild the whole corpus"
         )
         assert tally.get("unresolvable", 0) == 0
-        assert class_balance(cases)["scoreable"] == 130
+        assert class_balance(cases)["scoreable"] == 155
 
     def test_the_frozen_file_is_the_preferred_source_everywhere(self, real):
         # So `resolved_from` is identical on a machine holding every mined version and
@@ -367,7 +367,7 @@ class TestTheCorpusIsSelfContained:
 
         written, unresolvable = freeze_records(REPO_ROOT / "review", data, out)
 
-        assert (written, unresolvable) == (150, 0)
+        assert (written, unresolvable) == (175, 0)
         assert out.read_text(encoding="utf-8") == source.read_text(encoding="utf-8")
 
     def test_a_verdict_resolving_nowhere_is_reported_as_a_failure(self, tmp_path):
@@ -396,15 +396,20 @@ class TestAgainstTheRealCorpus:
     old corpus and these keep passing while the real one has grown.
 
     **Only the 125-case numbers were pre-registered.** `shape-A-batch-03.md` added 25 shape-A
-    cases with no prediction recorded beforehand, so the 150/130 literals below are a pin
-    on an observed corpus and not a prediction that survived. Noted here rather than
-    smoothed over, because the class used to say "pre-registered" about all of it.
+    cases with no prediction recorded beforehand, so the 150/130 literals were a pin on an
+    observed corpus and not a prediction that survived. Noted here rather than smoothed
+    over, because the class used to say "pre-registered" about all of it.
+
+    **`shape-A-batch-04-v11.md` WAS pre-registered, and it falsified three of its five.**
+    The 175/155 literals below are therefore a pin on an observed corpus *and* a record of
+    a failed prediction: `drift` was predicted at 4-9 of 25 and came in at 12, which put
+    the positive rate at 29.7% against a predicted 23-27%. The README grades all five.
     """
 
     def test_every_verdict_resolves_to_a_record(self, real):
         _, tally = real
-        assert tally["verdicts"] == 150
-        assert tally["cases"] == 150
+        assert tally["verdicts"] == 175
+        assert tally["cases"] == 175
         assert tally.get("unresolvable", 0) == 0
 
     def test_no_case_differs_between_the_versions_holding_it(self, real):
@@ -416,12 +421,19 @@ class TestAgainstTheRealCorpus:
         # were not predicted, and they came in at 4 positive / 21 negative -- 16% against
         # the established 28.6%. That gap is not readable at n=25 (1.4 sd on a binomial
         # at p=0.286), so it is recorded, not interpreted.
+        #
+        # Batch 04 was predicted at 4-9 `drift` and came in at 12, taking the rate the other
+        # way: 26.2% -> 29.7%, past where it started. Most of that gap is composition rather
+        # than a real difference -- 14 of the older shape-A cases are no longer minable and
+        # hold zero `drift`, and like-for-like the batch is p=0.14 against the rest. See the
+        # README. The point for this test is that the balance moves in BOTH directions, so
+        # nothing here may be extrapolated from the previous value.
         cases, _ = real
         balance = class_balance(cases)
-        assert balance["scoreable"] == 130
-        assert balance["positive"] == 34
-        assert balance["negative"] == 96
-        assert balance["majority_accuracy"] == pytest.approx(0.738, abs=0.001)
+        assert balance["scoreable"] == 155
+        assert balance["positive"] == 46
+        assert balance["negative"] == 109
+        assert balance["majority_accuracy"] == pytest.approx(0.703, abs=0.001)
 
     def test_the_new_batch_held_out_nothing_and_that_has_a_mechanism(self, real):
         # Batch 01 held out 20 of 125 as `unclear` (16%); batch 03 held out 0 of
@@ -430,6 +442,12 @@ class TestAgainstTheRealCorpus:
         # code file to read. Shape B is doc-only and every `unclear` in the corpus comes
         # from a shape-B sheet. Asserted so that a future all-shape-A batch producing
         # `unclear` cases is a finding rather than a shrug.
+        #
+        # Batch 04 then tested it PROSPECTIVELY and it held: zero `unclear` again, from a
+        # different mining pool and a near-inverted repo mix (48% `pydantic` against a corpus
+        # that was mostly `flask` and `requests`). That kills the competing explanation --
+        # that `unclear` tracked the reviewer's familiarity with the repo rather than the
+        # shape -- so shape is the mechanism. It is 0 of 95 on shape A, 20 of 80 on shape B.
         cases, _ = real
         unclear = [c for c in cases if c.verdict == "unclear"]
         assert len(unclear) == 20
@@ -444,6 +462,6 @@ class TestAgainstTheRealCorpus:
     def test_the_report_states_the_floor_and_the_holdout(self, real):
         cases, tally = real
         report = format_case_report(cases, tally)
-        assert "73.8% accuracy" in report
+        assert "70.3% accuracy" in report
         assert "F1 0.00" in report
         assert "held out 20" in report

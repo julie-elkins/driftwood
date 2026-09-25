@@ -22,7 +22,7 @@ The question is always: **at the parent commit, was this documentation false abo
 - **code** `httpx/dispatch/connection.py`
 - **shared identifiers** `host`
 
-**VERDICT: ?**
+**VERDICT: `drift`**
 
 <details><summary>doc diff</summary>
 
@@ -113,7 +113,7 @@ index 6e8cf0d..91feb97 100644
 - **code** `pydantic/types.py`
 - **shared identifiers** `callablediscriminator`, `pydanticusererror`, `discriminator`, `basemodel`, `callable`, `pydantic`, `model`, `union`, `base`
 
-**VERDICT: ?**
+**VERDICT: `drift`**
 
 <details><summary>doc diff</summary>
 
@@ -280,7 +280,7 @@ index c3d914bd3..8c47a395e 100644
 - **code** `fastapi/_compat/shared.py`
 - **shared identifiers** `union`
 
-**VERDICT: ?**
+**VERDICT: `cosmetic`**
 
 <details><summary>doc diff</summary>
 
@@ -425,7 +425,7 @@ index c009da8fd..9d76dabe6 100644
 - **code** `pydantic/types.py`
 - **shared identifiers** `uuid_version`, `validation`, `pydantic`, `uuid`
 
-**VERDICT: ?**
+**VERDICT: `new`**
 
 <details><summary>doc diff</summary>
 
@@ -549,7 +549,7 @@ index 18803c491..9723e54df 100644
 - **code** `flask/json.py`
 - **shared identifiers** `ver:0.11`, `ver:1.0`
 
-**VERDICT: ?**
+**VERDICT: `drift`**
 
 <details><summary>doc diff</summary>
 
@@ -605,7 +605,7 @@ index 2bd47902..b9ce4a08 100644
 - **code** `pydantic/_internal/_dataclasses.py`
 - **shared identifiers** `pydantic`, `schema`, `core`
 
-**VERDICT: ?**
+**VERDICT: `drift`**
 
 <details><summary>doc diff</summary>
 
@@ -824,7 +824,7 @@ index 11380861e..9747d7fb0 100644
 - **code** `httpx/_api.py`
 - **shared identifiers** `follow_redirects`, `allow_redirects`, `redirects`, `follow`
 
-**VERDICT: ?**
+**VERDICT: `drift`**
 
 <details><summary>doc diff</summary>
 
@@ -1054,7 +1054,7 @@ index da81853..eb81d46 100644
 - **code** `pydantic/fields.py`
 - **shared identifiers** `callablediscriminator`, `discriminator`, `callable`, `union`
 
-**VERDICT: ?**
+**VERDICT: `new`**
 
 <details><summary>doc diff</summary>
 
@@ -1200,7 +1200,7 @@ index c54ae72b2..c2d91a302 100644
 - **code** `pydantic/main.py`
 - **shared identifiers** `model_dump_json`, `serialization`, `model_copy`, `model_dump`, `models`, `model`, `copy`, `dump`, `json`, `mode`
 
-**VERDICT: ?**
+**VERDICT: `cosmetic`**
 
 <details><summary>doc diff</summary>
 
@@ -1330,7 +1330,7 @@ index fde9d26ba..0c5108966 100644
 - **code** `pydantic-core/src/serializers/type_serializers/mod.rs`
 - **shared identifiers** `ellipsis`
 
-**VERDICT: ?**
+**VERDICT: `new`**
 
 <details><summary>doc diff</summary>
 
@@ -1404,7 +1404,7 @@ index da95113ea..ad664e8f8 100644
 - **code** `docs/plugins/conversion_table.py`
 - **shared identifiers** `conversion_table`, `conversion`, `strict`, `table`, `json`
 
-**VERDICT: ?**
+**VERDICT: `cosmetic`**
 
 <details><summary>doc diff</summary>
 
@@ -1575,7 +1575,7 @@ index 1a0d49323..5093afc08 100644
 - **code** `pydantic/config.py`
 - **shared identifiers** `serialization`, `model_dump`, `validation`, `basemodel`, `pydantic`, `another`, `typing`, `field`, `model`, `base`, `dump`
 
-**VERDICT: ?**
+**VERDICT: `cosmetic`**
 
 <details><summary>doc diff</summary>
 
@@ -1727,7 +1727,7 @@ index 89f5bd103..a88a8df4b 100644
 - **code** `fastapi/dependencies/utils.py`
 - **shared identifiers** `union`
 
-**VERDICT: ?**
+**VERDICT: `cosmetic`**
 
 <details><summary>doc diff</summary>
 
@@ -1894,7 +1894,7 @@ index 23d8cd9fb..ab18ec2db 100644
 - **code** `src/flask/blueprints.py`
 - **shared identifiers** `versionchanged`, `versionadded`, `application`, `deprecated`, `provider`, `ver:2.2`, `ver:2.3`, `flask`, `attr`, `json`
 
-**VERDICT: ?**
+**VERDICT: `unrelated`**
 
 <details><summary>doc diff</summary>
 
@@ -2133,7 +2133,7 @@ index 4e3fe842..51f72279 100644
 - **code** `httpx/_models.py`
 - **shared identifiers** `default_encoding`, `autodetection`, `normalizer`, `callable`, `encoding`, `charset`, `content`, `bytes`, `best`
 
-**VERDICT: ?**
+**VERDICT: `new`**
 
 <details><summary>doc diff</summary>
 
@@ -2319,7 +2319,7 @@ index 4f82f01..cff6929 100644
 - **code** `pydantic/_internal/_core_metadata.py`
 - **shared identifiers** `schema`, `json`
 
-**VERDICT: ?**
+**VERDICT: `drift`**
 
 <details><summary>doc diff</summary>
 
@@ -2456,7 +2456,7 @@ index fb5910beb..afa880f0c 100644
 - **code** `httpx/exceptions.py`
 - **shared identifiers** `timeoutexception`, `connecttimeout`, `writetimeout`, `pooltimeout`, `readtimeout`, `exception`, `connect`, `timeout`, `pool`
 
-**VERDICT: ?**
+**VERDICT: `drift`**
 
 <details><summary>doc diff</summary>
 
@@ -2626,7 +2626,7 @@ index 61710cf..b19669c 100644
 - **code** `fastapi/routing.py`
 - **shared identifiers** `callbacks`, `operation`, `generate`, `fastapi`, `openapi`, `router`, `routes`, `path`
 
-**VERDICT: ?**
+**VERDICT: `cosmetic`**
 
 <details><summary>doc diff</summary>
 
@@ -2799,7 +2799,7 @@ index 21a1385a2..fb4784309 100644
 - **code** `pydantic/fields.py`
 - **shared identifiers** `callablediscriminator`, `discriminator`, `callable`, `field`, `union`
 
-**VERDICT: ?**
+**VERDICT: `drift`**
 
 <details><summary>doc diff</summary>
 
@@ -2919,7 +2919,7 @@ index 731f37b12..6dc71c55c 100644
 - **code** `src/flask/__init__.py`
 - **shared identifiers** `signals_available`, `signals`, `flask`
 
-**VERDICT: ?**
+**VERDICT: `drift`**
 
 <details><summary>doc diff</summary>
 
@@ -2996,7 +2996,7 @@ index 2361bdb4..4441b95a 100644
 - **code** `src/flask/blueprints.py`
 - **shared identifiers** `ensure_sync`, `functions`, `ensure`, `flask`, `meth`, `sync`, `view`
 
-**VERDICT: ?**
+**VERDICT: `unrelated`**
 
 <details><summary>doc diff</summary>
 
@@ -3149,7 +3149,7 @@ index a2b6c0f5..5fb84d86 100644
 - **code** `pydantic/_internal/_model_construction.py`
 - **shared identifiers** `undefined_types_warning`, `model_rebuild`, `undefined`, `pydantic`, `defined`, `rebuild`, `config`, `model`
 
-**VERDICT: ?**
+**VERDICT: `drift`**
 
 <details><summary>doc diff</summary>
 
@@ -3308,7 +3308,7 @@ index bf673bceb..7fba611b0 100644
 - **code** `pydantic/_internal/_generate_schema.py`
 - **shared identifiers** `complex`
 
-**VERDICT: ?**
+**VERDICT: `new`**
 
 <details><summary>doc diff</summary>
 
@@ -3403,7 +3403,7 @@ index 1bede71ca..47f082e2c 100644
 - **code** `flask.py`
 - **shared identifiers** `request_shutdown`, `before_request`, `after_request`, `request_init`, `functions`, `shutdown`, `after`, `init`, `meth`
 
-**VERDICT: ?**
+**VERDICT: `drift`**
 
 <details><summary>doc diff</summary>
 
@@ -3551,7 +3551,7 @@ index ad62e947..f7ba22e6 100644
 - **code** `docs/en/docs/js/custom.js`
 - **shared identifiers** `html_url`, `projects`, `fastapi`, `target`, `blank`, `login`, `owner`, `topic`, `href`
 
-**VERDICT: ?**
+**VERDICT: `drift`**
 
 <details><summary>doc diff</summary>
 

@@ -93,20 +93,25 @@ class TestTheConstantFloors:
             pytest.skip("mined labels not present")
         cases, _ = load_cases(REPO_ROOT / "review", data)
 
-        # Both floors MOVED when `shape-A-batch-03.md` was labelled, and the always-drift one
-        # is the one that matters: F1 0.444 -> 0.415 on 130 scoreable instead of 105. Every
-        # stage-3 F1 in the README was quoted against 0.444. A judge that scored 0.43 was
-        # below the old floor and is above the new one, so this is not bookkeeping -- the
-        # scores in `data/scores/judge-*.json` were measured on the 105-case corpus and are
-        # not comparable to anything run from here on without re-scoring.
+        # Both floors MOVED when `shape-A-batch-03.md` was labelled, and again when
+        # `shape-A-batch-04-v11.md` was: the always-drift F1 went 0.444 -> 0.415 -> 0.458 on
+        # 105 -> 130 -> 155 scoreable. Every stage-3 F1 in the README was quoted against
+        # 0.444. A judge that scored 0.43 was below the first floor, above the second, and is
+        # below the third, so this is not bookkeeping -- the scores in
+        # `data/scores/judge-*.json` were measured on the 105-case corpus and are not
+        # comparable to anything run from here on without re-scoring.
+        #
+        # AND THE FLOOR DOES NOT MOVE MONOTONICALLY. It fell, then rose past where it
+        # started. A reader who extrapolated the first move would have been wrong about the
+        # second, which is why the literal is pinned here rather than derived from the corpus.
         low = score(cases, _judgements(AlwaysJudge(False), cases))
-        assert low.n == 130
-        assert low.accuracy_all == pytest.approx(0.738, abs=0.001)
+        assert low.n == 155
+        assert low.accuracy_all == pytest.approx(0.703, abs=0.001)
         assert low.f1 == 0.0
 
         high = score(cases, _judgements(AlwaysJudge(True), cases))
-        assert high.accuracy_all == pytest.approx(0.262, abs=0.001)
-        assert high.f1 == pytest.approx(0.415, abs=0.001)
+        assert high.accuracy_all == pytest.approx(0.297, abs=0.001)
+        assert high.f1 == pytest.approx(0.458, abs=0.001)
 
     def test_a_held_out_case_is_never_scored(self):
         cases = [_case("u1", "unclear"), _case("p1", "drift")]
