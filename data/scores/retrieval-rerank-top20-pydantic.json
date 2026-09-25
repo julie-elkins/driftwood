@@ -1,0 +1,141 @@
+{
+  "eval": "retrieval-doc-to-code",
+  "scored_at": "each query's own at_sha",
+  "null_trials": 40,
+  "ks": [
+    1,
+    5,
+    10
+  ],
+  "ranker_provenance": {
+    "rerank_model": "cross-encoder/ms-marco-MiniLM-L6-v2",
+    "rerank_base": "lexical",
+    "rerank_top_n": 20,
+    "rerank_chunk_size": 800,
+    "rerank_chunk_overlap": 100,
+    "rerank_pooling": "max over (doc chunk, code chunk) pairs",
+    "rerank_recall_invariant_at_or_above_k": 20,
+    "rerank_ablation": "evidence tokens redacted from doc text; the BASE ranker is ablated too, so the reordered head is the ablated head"
+  },
+  "dataset": [
+    {
+      "repo": "pydantic/pydantic",
+      "queries": 346,
+      "distinct_docs": 69,
+      "distinct_shas": 218,
+      "judged_pairs": 810,
+      "pool_min_median_max": [
+        37,
+        101,
+        261
+      ],
+      "busiest_doc_share": 0.06936416184971098,
+      "dropped_positives": 0,
+      "dropped_docs": 0,
+      "shas_unreadable": []
+    }
+  ],
+  "results": [
+    {
+      "repo": "pydantic/pydantic",
+      "ranker": "shuffle (floor)",
+      "pool_median": 101,
+      "queries": 346,
+      "recall_at": {
+        "1": 0.011386078998073219,
+        "5": 0.05390293834296724,
+        "10": 0.10761440269749518
+      },
+      "mrr": 0.09632202833016368,
+      "recall_noise_range": {
+        "1": [
+          0.0005780346820809249,
+          0.02552986512524085
+        ],
+        "5": [
+          0.03439306358381503,
+          0.07957610789980732
+        ],
+        "10": [
+          0.07967244701348747,
+          0.1396917148362235
+        ]
+      },
+      "mrr_noise_range": [
+        0.07380797476415929,
+        0.12936253983888907
+      ]
+    },
+    {
+      "repo": "pydantic/pydantic",
+      "ranker": "path",
+      "pool_median": 101,
+      "queries": 346,
+      "recall_at": {
+        "1": 0.13116570327552987,
+        "5": 0.1823217726396917,
+        "10": 0.2466281310211946
+      },
+      "mrr": 0.3095354598285763,
+      "recall_noise_range": null,
+      "mrr_noise_range": null
+    },
+    {
+      "repo": "pydantic/pydantic",
+      "ranker": "lexical",
+      "pool_median": 101,
+      "queries": 346,
+      "recall_at": {
+        "1": 0.1846339113680154,
+        "5": 0.4152697495183044,
+        "10": 0.5894508670520231
+      },
+      "mrr": 0.4856964929541218,
+      "recall_noise_range": null,
+      "mrr_noise_range": null
+    },
+    {
+      "repo": "pydantic/pydantic",
+      "ranker": "lexical-ablated",
+      "pool_median": 101,
+      "queries": 346,
+      "recall_at": {
+        "1": 0.17957610789980732,
+        "5": 0.3983622350674374,
+        "10": 0.5697013487475916
+      },
+      "mrr": 0.4674973237346661,
+      "recall_noise_range": null,
+      "mrr_noise_range": null
+    },
+    {
+      "repo": "pydantic/pydantic",
+      "ranker": "rerank(lexical@20)",
+      "pool_median": 101,
+      "queries": 346,
+      "recall_at": {
+        "1": 0.11363198458574182,
+        "5": 0.38468208092485545,
+        "10": 0.5376204238921002
+      },
+      "mrr": 0.38330765148843576,
+      "recall_noise_range": null,
+      "mrr_noise_range": null
+    },
+    {
+      "repo": "pydantic/pydantic",
+      "ranker": "rerank(lexical@20)-ablated",
+      "pool_median": 101,
+      "queries": 346,
+      "recall_at": {
+        "1": 0.08858381502890172,
+        "5": 0.31339113680154146,
+        "10": 0.4831888246628131
+      },
+      "mrr": 0.3258435849363158,
+      "recall_noise_range": null,
+      "mrr_noise_range": null
+    }
+  ],
+  "labels": "data/labels-v11.jsonl"
+}
