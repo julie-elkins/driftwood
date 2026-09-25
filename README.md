@@ -1643,6 +1643,41 @@ the only one that named a **mechanism** — *this* class is where the wobble liv
 that failed. Nine stage-3d predictions and five here now say the same thing: this project can
 predict its own instrument and cannot predict this model.
 
+#### The batch the width argues for, pre-registered before a single verdict is written
+
+The null run's last finding is the one with an action attached: F1 on this arm is computed over two
+to five true positives, so the next thing that moves stage 3 is **more positives**, not a better
+judge. `review/shape-A-batch-04-v11.md` is 25 fresh shape-A cases — `--labels data/labels-v11.jsonl
+--shape A -n 25 --seed 23`, every prior sheet passed to `--exclude`, 175 case entries across eight
+sheets and 175 of them unique. Shape A rather than B because shape B carries no code file and never
+enters this arm at all.
+
+**This section exists before the sheet is labelled, which is the part batch 03 got wrong** — those 25
+cases were labelled with nothing registered first, and this file says so a few sections up. The
+predictions below are therefore visible in the commit that adds the blank sheet, and the labels
+arrive in a later one.
+
+One thing is already known and worth stating because it puts prediction 2 at risk: **the batch's repo
+mix is nothing like the corpus's.** It is `pydantic` 12, `flask` 5, `httpx` 4, `fastapi` 4 and
+**`requests` 0**, against an existing shape-A corpus that is `flask` 35 and `requests` 24 with
+`pydantic` at 8. That is a consequence of drawing what has not been drawn yet, not a choice, and it
+is declared rather than corrected — reshaping the draw to match the old mix would be selecting the
+corpus on the thing being measured.
+
+1. **`drift` comes in at 4 to 9 of 25**, point estimate 6, from the 24.3% rate on the existing 70.
+2. **Zero `unclear`.** Shape A has produced 0 of 70; shape B produced 20 of 80. If that is a property
+   of the *shape* — a code diff is there to be read — a `pydantic`-heavy batch stays at zero. If it
+   is partly a property of `flask` and `requests` being familiar, this is where it breaks.
+3. **`cosmetic` is still the largest single class, at 8 or more**, against 31 of 70 today.
+4. **The seeded arm's positive rate stays inside 23–27%**, so the `always-false` floor moves by less
+   than 0.03 F1 and this batch does not rescue any stage-3 comparison by moving a floor.
+5. **One batch does not make the F1 comparison readable.** With positives going from 17 to about 23,
+   a re-run null run on the enlarged arm will still report a width larger than the judge's gap to the
+   best free floor. Falsified if the width narrows enough to expose that gap — which would mean the
+   0.160 was mostly small-n rather than the model, and would be much better news than the
+   alternative. **This is the only one of the five that names a mechanism, which is the class this
+   project has got wrong every previous time.**
+
 ### The same gap, found independently on unrelated data
 
 [llm-eval-validity](https://github.com/julie-elkins/llm-eval-validity) audits a different
