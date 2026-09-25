@@ -12,10 +12,11 @@ fail loudly. They just become wrong.
 ground-truth miner, retrieval, the judge and the run-to-run null run all have numbers below.
 What none of them has is a win: every judge arm lost to a free floor, and that is reported here
 rather than buried. The null run then took most of this file's margins with it — running the same
-command three times with nothing changed moves F1 by **0.160**, which is wider than every gap
-stage 3 ever reported, including the losses. What survives is accuracy against a constant, where
-the judge is 21 points *behind* against a run-to-run width of 2.9 points — measured on 70 cases,
-and a batch labelled since has grown that arm to 95 without the judge having been re-run on it.
+command three times with nothing changed moves F1 by **0.160** on 70 cases and **0.131** on 95,
+which is wider than every gap stage 3 ever reported, including the losses. What survives is accuracy
+against a constant, where the judge is **17.9 points *behind* against a run-to-run width of 2.1
+points, both sides measured on the same 95 cases** — the 21-point version of that sentence had a
+70-case numerator against a 70-case denominator and was replaced rather than rescaled.
 Everything below is a measurement, not a projection — where a number is unreliable, this README
 says so, and where a number belongs to a corpus that has since grown, it names the corpus.
 
@@ -1161,7 +1162,11 @@ not comparable to anything scored from here on.** The score files say so themsel
 have been re-scored twice (`data/scores/judge-floors-150.json`, then
 `data/scores/judge-floors-175.json`); the model arms have not, and re-scoring them is not free,
 though it is cheap: judgements cache by content, so the old cases cost nothing and only the new ones
-are billed, roughly a fifth of the original arm per batch.
+are billed, roughly a fifth of the original arm per batch. **The one model arm that has been re-scored
+on the enlarged corpus is the stage-4 seeded arm** (`data/scores/judge-null-run-paid-95.json`, 95
+cases, alongside the 70-case `judge-null-run-paid.json` which is kept rather than overwritten) — and
+the cheapness held: 210 of its 285 calls were cache hits. Price it in tokens rather than calls, for
+the reason recorded in that section.
 
 **The margin on the claim this section exists to block got narrower, then widened past where it
 started.** "A judge at F1 0.40 is worse than a stuck switch" was true by 0.044, then by 0.015, and
@@ -1172,8 +1177,9 @@ rather than edited, and it was wrong in the direction of having been too pessimi
 only comfortable way to be wrong and still worth recording as a miss.
 
 **Stage 4 has since retired this whole line of argument, and the retirement is worth more than the
-argument was.** The run-to-run F1 width on the seeded arm is 0.160, so neither 0.015 nor 0.058 is a
-difference this project can see — re-checking the margin after every batch was re-checking noise,
+argument was.** The run-to-run F1 width on the seeded arm is 0.160 at 70 cases and 0.131 at 95, so
+neither 0.015 nor 0.058 is a difference this project can see on either — and the re-run that enlarged
+the arm did not rescue any of them. Re-checking the margin after every batch was re-checking noise,
 and watching it recover was watching noise recover. The claim it exists to block is still true, but
 the evidence for it is the accuracy gap, not any of these three numbers.
 
@@ -1639,7 +1645,9 @@ smaller than that, and all three stop being results:
 **One comparison survives, and it is not close.** Accuracy is 51.4 / 51.4 / 54.3% against
 `always-not-false` at **75.7%** on the same 70 cases: 21.4 points behind, against an accuracy width
 of 2.9 points — 7.4× the noise. Every trial also lands below the *bottom* of the chance accuracy
-range (0.557 .. 0.714). Accuracy counts an abstention as wrong, which is the metric's own bias and
+range (0.557 .. 0.714) — **a 70-case fact that is false at 95, where the chance range descends to
+0.495 .. 0.653 and every trial is inside it; the section on the re-run works through why, and it is
+not because the judge improved.** Accuracy counts an abstention as wrong, which is the metric's own bias and
 is stated where it is defined; here it is the bias that makes the loss visible, since the judge
 abstains on 16–21% of cases and a constant abstains on none. **The judge is worse than a stuck
 switch. That claim holds, it just never held on F1.**
@@ -1754,21 +1762,27 @@ artefact of the sloppiness.
 
 The best free floor went 0.42 → 0.490, which moves the bar **away** from the judge rather than
 toward it. So the batch drawn to make the F1 comparison readable made the thing being compared
-against harder to reach; whether the net effect is readable at all is prediction 5, and it is
-unresolved. Two consequences to apply immediately:
+against harder to reach; whether the net effect is readable at all was prediction 5, and it has since
+been bought and graded — **it held**, three sections down. The two consequences below were written
+before that, and both are now resolved there rather than open:
 
 - **The surviving accuracy comparison is now stale on one side.** "51.4–54.3% against 75.7%" is a
   70-case sentence. The majority floor on 95 is **69.5%**, six points lower, and the judge's
   accuracy on 95 is *not measured* — 25 of its cases have never been judged. Do not pair the old
   numerator with the new denominator; that is the corpus-mismatch error this file warns about two
-  sections up, and it would flatter the judge by six points.
+  sections up, and it would flatter the judge by six points. **Now measured on one corpus: 49.5–51.6%
+  against 69.5%, a 17.9-point deficit** — so the honest same-corpus gap is 3.5 points smaller than the
+  70-case sentence, and the mismatch would have flattered the judge by six as predicted.
 - **The size of the judge's F1 deficit is now unknown, not merely unreadable.** It is tempting to
   put the best trial's 0.320 next to the new 0.490 and call the gap 0.17, i.e. finally outside the
   0.160 width — and that would be the same corpus mismatch as the bullet above, in the flattering
   direction this time. 0.320 is a 70-case number and 0.490 is a 95-case one. What the floor rising
   does establish is that the bar moved away from the judge, so *if* the re-run reproduces anything
   like the old level, the gap is larger than the one that was unreadable. That is a reason to buy the
-  re-run, not a result from having bought it.
+  re-run, not a result from having bought it. **Bought: the judge's level rose too, by about as much as
+  the floor did, and the gap came out at 0.080 — smaller than the 0.10 it replaced, not larger.** The
+  reasoning in this bullet was sound and its expectation was wrong, which is the argument for buying
+  measurements rather than deriving them.
 
 #### Where the doubling came from, and it is mostly the mining pool rather than the labeller
 
@@ -1813,7 +1827,93 @@ The 95-case null run is a purchase, so it is priced rather than made. Each trial
 adding cases does not change any existing case's prompt. So a re-run at `--trials 3` on the enlarged
 arm bills **25 new replies per trial, 75 in total** — about a third of the original 210 — and the
 other 210 are cache hits. That is the designed behaviour of the per-trial cache dirs rather than a
-trick, and it is the cheapest paid result this project has left to buy. Nothing about it is run here.
+trick, and it is the cheapest paid result this project has left to buy.
+
+**A call-count ratio under-prices a resumed run, and by six points here.** 75 of 210 calls is 36%,
+but the 25 new cases are `pydantic`-heavy and their prompts run longer than the arm's average, so the
+input-token price is ~1,106,361 against the original ~2,686,347 — **41%.** The figure was obtained
+by building all 95 contexts and hashing the exact keys the run would look up against
+`.cache/nr-paid/trial-00`: 70 hit, 25 missed. `judge-null-run --dry-run` says ~3,792,708, which is a
+true upper bound and 3.4× the real price, because it assumes an empty cache. Price a resumed run on
+tokens, not on calls.
+
+#### Prediction 5 held: the gap the batch was drawn to expose is still inside the noise
+
+`--arm seeded --judges model --trials 3 --retry-max-tokens 12000`, `model:claude-sonnet-5`, **95**
+shape-A cases, 29 positive (30.5%). 285 calls, of which **210 were served from the trial directories
+and 75 were bought** — exactly the 70-hit, 25-miss split predicted per trial before the money was
+spent (`data/scores/judge-null-run-paid-95.json`).
+
+| trial | F1 | precision | recall | accuracy | abstained | cached | truncated |
+|---|---|---|---|---|---|---|---|
+| 0 | 0.375 | 0.409 | 0.346 | 51.6% | 16.8% | 70 | 0 |
+| 1 | **0.279** | 0.333 | 0.240 | 49.5% | 17.9% | 70 | 0 |
+| 2 | **0.410** | 0.500 | 0.348 | 51.6% | 24.2% | 70 | 1 |
+
+Widths, each a lower bound over three draws: F1 **0.131**, precision 0.167, recall 0.108, accuracy
+0.021. Medians 0.375 / 0.409 / 0.346 / 0.516.
+
+**Prediction 5 said the width would still be larger than the judge's gap to the best free floor, and
+it is.** Best free floor on the same 95 cases is `lexical-absence(>=6)` at 0.490. Against the best
+trial, 0.410, the gap is **0.080**; against the median, 0.375, it is **0.115**. Both are inside 0.131.
+So the enlarged corpus did not make *"the judge lost to grep"* readable on F1 — the batch raised the
+floor by 0.07 and the judge's level by about the same amount, and the two cancelled.
+
+**The width did not narrow, whatever the two numbers look like.** 0.160 then and 0.131 now are two
+lower bounds from three draws each, on two different corpora, with no error bar on either. There is
+no width-of-the-width here, and reading a 0.03 change between two three-sample min-maxes as the noise
+falling is the same mistake as reading any other sub-noise difference. Both figures say the same
+thing: the resolution of this instrument is somewhere above a tenth of a point of F1.
+
+**What is new is that the surviving comparison is finally on one corpus.** Accuracy is 49.5 / 51.6 /
+51.6% against `always-not-false` at **69.5% on the same 95 cases** — a **17.9-point** deficit against
+a 2.1-point width, 8.5× the noise. The 70-case sentence put it at 21.4 points, so the honest figure
+is 3.5 points smaller than the one this file has been quoting, and it is the first version of the
+sentence whose numerator and denominator were measured on the same cases. **The judge is worse than a
+stuck switch. That is what survives, and it is now saying so about 95 cases rather than 70.**
+
+**One clause of the 70-case version is falsified, and not in the judge's favour.** *"Every trial lands
+below the bottom of the chance accuracy range"* was true at 70 (0.557 .. 0.714) and is false at 95:
+the chance range is 0.495 .. 0.653 and all three trials are inside it, with trial 1 at 0.4947 against
+a p5 of 0.4947 — equal to four decimal places. The judge did not improve; **the chance range came down
+to meet it**, because a more even class balance lowers what proportional guessing scores. What now
+clears chance is the constant, not the model: 69.5% is above the chance p95 of 65.3%, and no judge
+trial is. On F1 the chance range (0.182 .. 0.429, width 0.247) remains 1.9× wider than the run-to-run
+width and therefore still the binding floor, so nothing quoted against *it* needs revisiting.
+
+**Prediction 4's falsification replicated on a larger arm.** Instability is 41.4% on the 29 positives
+against 39.4% on the 66 negatives — a ratio of 1.05, where the original prediction wanted 2 and the
+70-case measurement gave 1.09. 57 of 95 cases answer the same way every time (60.0%); of the 38 that
+do not, 28 flip only between an answer and an abstention and 10 answer both ways, which is the
+2.8-to-1 version of a pattern that was 2.4-to-1 before. By verdict: `drift` 12 of 29 unstable, `new`
+12 of 22, `cosmetic` 14 of 37, `unrelated` 0 of 7 (n < 10, not readable).
+
+**The harness refused its own result, correctly, and the refusal was cleared for free rather than for
+141%.** One reply of 285 hit the 12,000-token ceiling, so `judge-null-run` printed `NOT A RESULT: …
+raise --retry-max-tokens and re-run before reading any width below`. That gate is right to fire in
+general — truncation follows how hard a case is, so it lands on exactly the cases a width depends on.
+It is also expensive to satisfy: **`max_tokens` is inside the cache key**, so raising the retry
+ceiling re-keys every case in every trial. Measured, not assumed: 285 new calls and ~3,792,707 input
+tokens, **141% of the original run** — which is also where the `--dry-run` upper bound comes from.
+
+So the affected reply was bounded instead. It is case `8ceee7907a82cb40` in `pydantic`, hand-labelled
+`new`, which makes it a **negative** — resolving it can only add a false positive or a true negative,
+and cannot touch `tp` or recall. Re-scoring trial 2 with the real `score()` under both answers gives
+F1 0.400 or 0.410, so the width lands between 0.121 and 0.131 and the gap to the floor between 0.080
+and 0.090. **Prediction 5 holds under every resolution, on both the best-trial and the median
+reading.** Paying 141% could not have changed the grade. The reproduction was checked first: all three
+trials rebuild to the file's F1, accuracy and full confusion matrix to nine decimal places, because a
+sensitivity analysis run on a scorer that does not reproduce the thing it is perturbing is worth
+nothing. A first attempt at this bound was wrong for exactly that reason — it counted abstentions as
+false negatives, reproduced 0.356 against a recorded 0.410, and every conclusion drawn from it was
+discarded.
+
+**Provenance, since it is not a clean single purchase.** Within each trial directory, 70 replies were
+bought during the 70-case run and 25 during this one. They are still one internally consistent set of
+answers — a content-keyed hit is the reply the model gave for that exact prompt, and no existing
+case's prompt changed when the corpus grew — but the arm was not judged in one sitting, and a reader
+comparing dates on the cache directories should know that before concluding anything about drift over
+time in the model itself.
 
 ### The same gap, found independently on unrelated data
 
@@ -1853,10 +1953,10 @@ instrument is consistent.
 | 2c · Hand-labelled docs, candidates = the whole tree — the ground truth 2b needs | **built, 18 docs labelled, split verdict** |
 | 2d · Term frequency in `Lexical`, one lever, nested | **built, measured, readable on 1 repo of 5** |
 | 2d · Cross-encoder reranker over `lexical`'s top 20 | **DONE — 32.5M passes, 55 h. No readable gain on the ablated row of any of the 5 repos; the one non-ablated gain traces to the label rule** |
-| 3 · The judge — does a document make a false claim, at one commit | **built, measured, lost to every free floor — and stage 4 then showed the F1 losses are inside the run-to-run width. The loss that survives is accuracy, 21 points behind a constant on 70 cases. The seeded arm is now 95 cases and the judge has not been re-run on it, so that gap is stale on its floor side** |
+| 3 · The judge — does a document make a false claim, at one commit | **built, measured, lost to every free floor — and stage 4 then showed the F1 losses are inside the run-to-run width. The loss that survives is accuracy: 17.9 points behind a constant, with both sides measured on the same 95 cases** |
 | 4 · Null-run harness — same input twice, to establish the noise floor | **built and measured both halves. Control: exactly 0.000 on five free judges, 130/130 stable. Paid: F1 width 0.160 over 3 trials of the seeded arm, which is wider than every margin in this file. 4 of 5 pre-registered predictions held; the one that named a mechanism failed** |
 | 4b · The label batch the width argued for — 25 shape-A cases | **labelled. 1 of 4 gradeable predictions held, and the three misses are about the corpus rather than the model. Every free floor rose: best free judge 0.42 → 0.490 on the seeded arm, so the bar moved away from the judge** |
-| 4c · Re-run the paid null run on the enlarged 95-case arm | **priced, not bought — 75 new replies, about a third of the original, because 70 of 95 are cache hits in each trial directory. This is the only thing that grades prediction 5 and the only thing that re-reads the surviving accuracy gap** |
+| 4c · Re-run the paid null run on the enlarged 95-case arm | **bought and graded. 75 new replies exactly as priced, 41% of the original in tokens against the 36% the call count suggested. Prediction 5 HELD: width 0.131 still exceeds the 0.080 gap to the best free floor, so *"the judge lost to grep"* is still not readable on F1. The accuracy loss is now same-corpus at 17.9 points, and one 70-case clause — every trial below the chance floor — is falsified** |
 | 5 · GitHub App + CI eval gate | **designed, and deliberately NOT built — a decision, not a gap.** A CI gate that blocks a merge needs a judge whose error rate is known and better than a constant. This one's is known and is not, so the gate would either block correct docs or pass silently, and deploying it would convert a measured loss into an unmeasured one |
 
 Stage 3 is not architecture on faith. Version-support claims turned out to be a class that
