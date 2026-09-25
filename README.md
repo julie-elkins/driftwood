@@ -11,8 +11,11 @@ fail loudly. They just become wrong.
 **Status: stages 1 through 4 are built and measured. Stage 5 is deliberately not built.** The
 ground-truth miner, retrieval, the judge and the run-to-run null run all have numbers below.
 What none of them has is a win: every judge arm lost to a free floor, and that is reported here
-rather than buried. Everything below is a measurement, not a projection — where a number is
-unreliable, this README says so.
+rather than buried. The null run then took most of this file's margins with it — running the same
+command three times with nothing changed moves F1 by **0.160**, which is wider than every gap
+stage 3 ever reported, including the losses. What survives is accuracy against a constant, where
+the judge is 21 points *behind* against a run-to-run width of 2.9 points. Everything below is a
+measurement, not a projection — where a number is unreliable, this README says so.
 
 That line read **"stage 1 of 5. The retrieval and agent layers are not [built]"** until
 2026-09-25 — four stages after it stopped being true, in the front matter of a repository whose
@@ -1156,6 +1159,11 @@ of labels in the same direction would make it false — not because the judge im
 the floor came down to meet it. That is the failure mode this whole section is built to catch, and
 it is now 0.015 away, so the sentence needs re-checking after every batch rather than quoting.
 
+**Stage 4 has since retired this paragraph, and the retirement is worth more than the paragraph
+was.** The run-to-run F1 width on the seeded arm is 0.160, so a 0.015 margin was never a difference
+this project could see — re-checking it after every batch would have been re-checking noise. The
+claim it exists to block is still true, but the evidence for it is the accuracy gap, not this.
+
 No prediction was registered for these 25 before they were labelled, which breaks the rule this
 project applies everywhere else. It is recorded here rather than papered over: the 150/130 numbers
 are a pin on an observed corpus, not a prediction that survived contact. What *can* be said
@@ -1460,6 +1468,9 @@ That gap is not pedantic here. Stage 3's largest margin over a constant is **0.0
 2d's one readable gain is a tenth of a point wide. A run-to-run width of 0.05 would make both of
 them unreadable, and until this stage nothing in the repository could have said so either way.
 
+It came out at **0.160**, so both are unreadable, and so is a good deal more than both. The
+measurement is below; it was worth its price precisely because it did not come back small.
+
 `judge-null-run` judges one arm K times, then reports min–max per metric, per-case stability split
 by *kind* of flip, and the run-to-run width next to the chance range it may replace as the binding
 floor.
@@ -1486,7 +1497,8 @@ here, on a judge that cannot vary, and the report then refuses to print a width 
 FAULT … Do not buy a paid trial until this reads 0.000.*
 
 **It says nothing whatever about the model's width.** Zero on a constant is a property of the
-constant. The number stage 3 needs has not been bought.
+constant. The number stage 3 needs was bought after this control passed, and it is two sections
+below.
 
 ### Three decisions, each of which reports a NARROWER width if it is got wrong
 
@@ -1521,7 +1533,7 @@ A stable headline is also not a stable judge, which is why stability is counted 
 into *contradictions* (answered both ways) and *abstention flips* (answer ↔ abstain). Eight cases
 flipping to `false` and eight to `not-false` leave F1 almost exactly where it was.
 
-### The paid half is priced and not bought, and the predictions are written down first
+### The paid half: priced first, predicted second, bought third
 
 The width stage 3 needs is on the arm stage 3's headline was measured on: `--arm seeded`,
 `model:claude-sonnet-5`. That arm is **70 shape-A cases now, not the 45 the 0.364 was measured on**
@@ -1553,6 +1565,84 @@ Five predictions, written before any trial is bought:
 5. At least one case will be **answered both ways** across three trials. A contradiction rate of
    exactly zero at temperature 0 is the result that would make me look for a shared cache first.
 
+#### The width is 0.160 F1, which is wider than anything this file had to compare
+
+`--arm seeded --judges model --trials 3 --retry-max-tokens 12000`, `model:claude-sonnet-5`, 70
+shape-A cases, 17 positive (24.3%), nothing held out. 210 calls. **0 replies served from any
+trial's own cache and 0 truncated in any trial** — the per-trial directories did the job they
+exist for, and the retry ceiling kept the pipeline the same one the 0.364 was measured on.
+
+| trial | F1 | precision | recall | accuracy | abstained |
+|---|---|---|---|---|---|
+| 0 | 0.303 | 0.294 | 0.312 | 51.4% | 15.7% |
+| 1 | **0.160** | 0.182 | 0.143 | 51.4% | 18.6% |
+| 2 | **0.320** | 0.364 | 0.286 | 54.3% | 21.4% |
+
+Widths, each **a lower bound** over three draws: F1 **0.160**, precision 0.182, recall 0.170,
+accuracy 0.029. Medians 0.303 / 0.294 / 0.286 / 0.514.
+
+**So the minimum detectable effect on this arm is 0.160 F1.** A difference smaller than that cannot
+be told from running the same command twice, whatever produced it. Three things in this file are
+smaller than that, and all three stop being results:
+
+- The **0.015** margin behind *"a judge at F1 0.40 is worse than a stuck switch"* is 10.7× below the
+  width. It was never a measurement. Two sections above, that margin is described as needing
+  re-checking after every batch; the honest correction is that no number of batches would have
+  helped, because the quantity was smaller than the instrument's resolution the whole time.
+- Stage 2d's one readable gain, a tenth of a point, is inside it.
+- **And so is this arm's own loss.** The free floors on these same 70 cases, re-measured for nothing
+  in the same session (`judge-eval --judges floors --arms seeded`): `always-false` 0.39,
+  `always-not-false` 0.00, `lexical-absence` 0.41 / **0.42** / 0.41 at thresholds 1 / 3 / 6. Best
+  trial 0.320 against the best floor 0.42 is a gap of 0.10 — **inside 0.160.** *"The judge lost to
+  grep"* is therefore not readable on F1 either. This file has been making that comparison in the
+  right direction and with the wrong confidence.
+
+**One comparison survives, and it is not close.** Accuracy is 51.4 / 51.4 / 54.3% against
+`always-not-false` at **75.7%** on the same 70 cases: 21.4 points behind, against an accuracy width
+of 2.9 points — 7.4× the noise. Every trial also lands below the *bottom* of the chance accuracy
+range (0.557 .. 0.714). Accuracy counts an abstention as wrong, which is the metric's own bias and
+is stated where it is defined; here it is the bias that makes the loss visible, since the judge
+abstains on 16–21% of cases and a constant abstains on none. **The judge is worse than a stuck
+switch. That claim holds, it just never held on F1.**
+
+**And the positive class rests on two to five cases.** Flags raised per trial: 17 (5 true, 12
+false), 11 (2 true, 9 false), 11 (4 true, 7 false). Of the 17 positives, **2 are caught in all three
+trials, 6 are caught at least once, and 11 are never caught at all.** An F1 computed over two to
+five true positives is not a stable statistic regardless of the model, so the 0.160 is partly a
+property of this corpus and not only of this judge — which is an argument for more labels before
+more model, and the one lever stage 3 has left.
+
+#### The five predictions, graded and not edited
+
+1. **CONFIRMED, by 5.3×.** ≥ 0.03 predicted, 0.160 measured.
+2. **CONFIRMED.** 0.160 against a chance range recomputed on these 70 at 0.065 .. 0.412, width
+   0.347 — 2.2× wider. Chance stays the binding floor for the stage-3 tables, so nothing quoted
+   against *it* needs revisiting. Same on accuracy (5.5×) and precision (1.9×).
+3. **CONFIRMED, 2.4 to 1.** 19 cases flipped only between an answer and an abstention against 8 that
+   answered both ways; 43 of 70 were identical every trial (61.4%). What the model is least settled
+   about is whether it has enough in front of it to decide, not which way to decide.
+4. **FALSIFIED, and kept as written.** It predicted the instability concentrated on the `drift`
+   positives at more than twice the negatives' rate. Measured: **41.2%** on the 17 positives against
+   **37.7%** on the 53 negatives — a ratio of 1.09, not 2. And `drift` is not even the least stable
+   class: `new` is 8 of 17 (47.1%), `drift` 7 of 17 (41.2%), `cosmetic` 12 of 31 (38.7%),
+   `unrelated` 0 of 5 (n<10, not readable). Instability is close to uniform across the label
+   taxonomy, which is what a judge with no traction looks like rather than one that finds positives
+   hard. That prediction's second clause — *"F1 will move further than the overall flip rate
+   predicts"* — carried no threshold and cannot be graded either way, the same defect as stage 2d's
+   prediction of ambiguity.
+5. **CONFIRMED, 8 cases, and worth the least of the five.** A contradiction rate of zero would have
+   sent me looking for a shared cache, so this was written to catch a harness fault, not to say
+   anything about the model. A prediction whose falsification would mean *the instrument is broken*
+   is a control, and counting it as a hit inflates the score.
+
+**Four of five, and the failure is the informative one.** The pattern from the doc-budget probe was
+5 right and all 5 about the harness, with every model prediction wrong. This looks like the opposite
+and mostly is not: predictions 1, 2, 3 and 5 all ask *how much does the model wobble*, and a
+variance prediction on a judge already known to be near chance is an easy target. Prediction 4 is
+the only one that named a **mechanism** — *this* class is where the wobble lives — and it is the one
+that failed. Nine stage-3d predictions and five here now say the same thing: this project can
+predict its own instrument and cannot predict this model.
+
 ### The same gap, found independently on unrelated data
 
 [llm-eval-validity](https://github.com/julie-elkins/llm-eval-validity) audits a different
@@ -1568,7 +1658,9 @@ So the two repositories are the same claim approached from either side. That one
 spread and found it swallowed a reported result. This one had been quoting a **0.015** margin
 between a judge and a constant for six days with no spread measured at all — which is why the
 paid half above is a gap to be closed rather than a nicety, and why the free half was built to
-fail loudly first.
+fail loudly first. **The spread has now been measured here too, and it swallowed the margin by a
+factor of eleven.** Two harnesses, two corpora, no shared method, and the same finding both times:
+the single-pass number was reporting a difference smaller than the thing it was measured with.
 
 They do not share a method, and that is deliberate. The other study reaches for the
 reliability-and-agreement toolkit its data supports, because it has a human reference standard
@@ -1589,8 +1681,8 @@ instrument is consistent.
 | 2c · Hand-labelled docs, candidates = the whole tree — the ground truth 2b needs | **built, 18 docs labelled, split verdict** |
 | 2d · Term frequency in `Lexical`, one lever, nested | **built, measured, readable on 1 repo of 5** |
 | 2d · Cross-encoder reranker over `lexical`'s top 20 | **DONE — 32.5M passes, 55 h. No readable gain on the ablated row of any of the 5 repos; the one non-ablated gain traces to the label rule** |
-| 3 · The judge — does a document make a false claim, at one commit | **built, measured, lost to every free floor** |
-| 4 · Null-run harness — same input twice, to establish the noise floor | **built; harness control passes at exactly 0.000 on five free judges, 130/130 cases stable. The paid width is priced at ~2.69M input tokens and NOT bought** |
+| 3 · The judge — does a document make a false claim, at one commit | **built, measured, lost to every free floor — and stage 4 then showed the F1 losses are inside the run-to-run width. The loss that survives is accuracy, 21 points behind a constant** |
+| 4 · Null-run harness — same input twice, to establish the noise floor | **built and measured both halves. Control: exactly 0.000 on five free judges, 130/130 stable. Paid: F1 width 0.160 over 3 trials of the seeded arm, which is wider than every margin in this file. 4 of 5 pre-registered predictions held; the one that named a mechanism failed** |
 | 5 · GitHub App + CI eval gate | **designed, and deliberately NOT built — a decision, not a gap.** A CI gate that blocks a merge needs a judge whose error rate is known and better than a constant. This one's is known and is not, so the gate would either block correct docs or pass silently, and deploying it would convert a measured loss into an unmeasured one |
 
 Stage 3 is not architecture on faith. Version-support claims turned out to be a class that
