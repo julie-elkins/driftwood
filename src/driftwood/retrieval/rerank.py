@@ -43,6 +43,8 @@ from __future__ import annotations
 
 import hashlib
 import math
+import os
+import time
 from pathlib import Path
 from typing import Protocol
 
@@ -64,6 +66,13 @@ __all__ = [
 # Both sides share one 512-token window, unlike the dense arm's 1600/200. 800 characters
 # is roughly 200 tokens, so a pair lands near 400 plus specials and nothing is truncated.
 RERANK_CHUNKING = Chunking(size=800, overlap=100)
+
+# Seconds between mid-split cache checkpoints. 15 minutes is chosen against a measured
+# save cost, not picked round: rebuilding and writing the arrays took 6.3s at 7.9M pairs,
+# so ~26s at the full run's 32.5M, which is 2.9% overhead at this interval and bounds a
+# crash to a quarter hour of GPU time. Lower it and the write starts to dominate; raise it
+# and the bound stops being the point.
+DEFAULT_SAVE_INTERVAL = 900.0
 
 
 class PairScorer(Protocol):
@@ -100,13 +109,32 @@ class PairCache:
     scale, so the resulting ranking would be arbitrary and the run would look clean.
     """
 
-    def __init__(self, path: Path | None, model_id: str, chunking: Chunking) -> None:
+    def __init__(
+        self,
+        path: Path | None,
+        model_id: str,
+        chunking: Chunking,
+        save_interval: float = DEFAULT_SAVE_INTERVAL,
+    ) -> None:
         self.path = path
         self.model_id = model_id
         self.chunking = chunking
         self._scores: dict[str, float] = {}
         self.hits = 0
         self.misses = 0
+        # Saving only between repos was measured as the wrong granularity, on the run it
+        # cost. `pydantic/pydantic` is 41.8 of the 55.1 priced hours -- 76% of the bill in
+        # ONE split -- so the between-repos checkpoint lands immediately before the only
+        # place it was needed. A run died ~40 hours into that split on 2026-09-22 and the
+        # cache held 7,927,889 pairs, 24.4% of the 32,553,730 priced: exactly the four
+        # cheap repos and not one pydantic pair. The four survived and the expensive one
+        # did not, which is the same failure the per-repo comment below was written to
+        # prevent. So checkpoint on a clock as well, and bound the loss by time instead of
+        # by whichever repo happens to be last.
+        self.save_interval = save_interval
+        self._unsaved = 0
+        self._last_save = time.monotonic()
+        self.checkpoints = 0
         if path is not None and path.exists():
             self._load(path)
 
@@ -173,8 +201,24 @@ class PairCache:
             values = scorer.score(pending)
             for key, value in zip(pending_keys, values, strict=True):
                 self._scores[key] = float(value)
+            self._unsaved += len(pending)
+            self.maybe_save()
 
         return [self._scores[key] for key in keys]
+
+    def maybe_save(self) -> None:
+        """Checkpoint if the clock has run out and there is anything new to write.
+
+        Both conditions matter. Without the unsaved count a cache that is scoring nothing
+        but hits -- which is what a resumed run does for hours -- would rewrite a 1.1GB
+        file every interval for no gain.
+        """
+        if self.path is None or not self._unsaved:
+            return
+        if time.monotonic() - self._last_save < self.save_interval:
+            return
+        self.save()
+        self.checkpoints += 1
 
     def save(self) -> None:
         if self.path is None:
@@ -188,9 +232,21 @@ class PairCache:
         ordered = sorted(self._scores)
         keys = np.array([k.encode("ascii") for k in ordered], dtype="S32")
         values = np.array([self._scores[k] for k in ordered], dtype=np.float32)
-        np.savez(
-            self.path, __stamp__=np.array(self._stamp()), keys=keys, scores=values
-        )
+        # Written to a sibling and renamed, because the save is no longer rare. At 32.5M
+        # pairs the write takes ~26s and now happens every 15 minutes, so "killed during
+        # the write" stops being a theoretical case -- and np.savez truncates in place,
+        # which would turn a crash into the loss of the ENTIRE cache rather than of the
+        # last interval. `os.replace` is atomic on the same filesystem, so a reader sees
+        # either the previous complete cache or the new one. Passing an open handle rather
+        # than the path also stops np.savez appending a second `.npz` to the temp name.
+        tmp = self.path.with_suffix(self.path.suffix + ".partial")
+        with tmp.open("wb") as handle:
+            np.savez(
+                handle, __stamp__=np.array(self._stamp()), keys=keys, scores=values
+            )
+        os.replace(tmp, self.path)
+        self._unsaved = 0
+        self._last_save = time.monotonic()
 
 
 def default_pair_cache_path(model_id: str, chunking: Chunking, root: Path) -> Path:

@@ -19,6 +19,7 @@ same reason a real one's do.
 from __future__ import annotations
 
 import re
+from unittest import mock
 
 import pytest
 
@@ -388,6 +389,72 @@ class TestThePairCacheIsKeyedOnBothSides:
         cache.save()
 
         assert list(tmp_path.iterdir()) == []
+
+    def test_a_long_split_checkpoints_before_it_ends(self, tmp_path):
+        """The loss this prevents was paid once. Saving only between repos put the
+        checkpoint immediately before `pydantic/pydantic`, which is 76% of the priced
+        hours, so a run that died inside it kept the four cheap repos and none of the
+        expensive one."""
+        path = tmp_path / "pairs.npz"
+        cache = PairCache(path, "stub-cross-v1", RERANK_CHUNKING, save_interval=0.0)
+
+        cache.get_or_score([("doc one", "code one")], OverlapScorer())
+
+        assert path.exists(), "a mid-split checkpoint should have landed"
+        assert cache.checkpoints == 1
+        reloaded = PairCache(path, "stub-cross-v1", RERANK_CHUNKING)
+        scorer = OverlapScorer()
+        assert reloaded.get_or_score([("doc one", "code one")], scorer) is not None
+        assert scorer.calls == 0, "the checkpoint must be a loadable cache, not a stub"
+
+    def test_the_clock_holds_the_checkpoint_back(self, tmp_path):
+        path = tmp_path / "pairs.npz"
+        cache = PairCache(path, "stub-cross-v1", RERANK_CHUNKING, save_interval=3600.0)
+
+        cache.get_or_score([("d", "c")], OverlapScorer())
+
+        assert not path.exists(), "an interval that has not elapsed must not write"
+        assert cache.checkpoints == 0
+
+    def test_a_cache_scoring_only_hits_does_not_rewrite(self, tmp_path):
+        """What a resumed run does for hours. Rewriting a 1.1GB file every interval to
+        record nothing new is the one way this change could cost more than it saves."""
+        path = tmp_path / "pairs.npz"
+        cache = PairCache(path, "stub-cross-v1", RERANK_CHUNKING, save_interval=0.0)
+        cache.get_or_score([("d", "c")], OverlapScorer())
+        assert cache.checkpoints == 1
+
+        cache.get_or_score([("d", "c")], OverlapScorer())
+
+        assert cache.checkpoints == 1, "an all-hits call has nothing to checkpoint"
+
+    def test_an_interrupted_write_leaves_the_previous_cache_intact(self, tmp_path):
+        """`np.savez` truncates in place, so without the rename a kill during one of the
+        ~168 writes a full run now makes would destroy the whole cache rather than the
+        last interval -- turning the fix into a bigger version of the bug."""
+        path = tmp_path / "pairs.npz"
+        first = PairCache(path, "stub-cross-v1", RERANK_CHUNKING)
+        expected = first.get_or_score([("d", "c")], OverlapScorer())
+        first.save()
+
+        second = PairCache(path, "stub-cross-v1", RERANK_CHUNKING)
+        second.get_or_score([("e", "f")], OverlapScorer())
+        with mock.patch("numpy.savez", side_effect=KeyboardInterrupt):
+            with pytest.raises(KeyboardInterrupt):
+                second.save()
+
+        survivor = PairCache(path, "stub-cross-v1", RERANK_CHUNKING)
+        scorer = OverlapScorer()
+        assert survivor.get_or_score([("d", "c")], scorer) == pytest.approx(expected)
+        assert scorer.calls == 0, "the complete previous cache must still be readable"
+
+    def test_no_partial_file_is_left_behind(self, tmp_path):
+        path = tmp_path / "pairs.npz"
+        cache = PairCache(path, "stub-cross-v1", RERANK_CHUNKING)
+        cache.get_or_score([("d", "c")], OverlapScorer())
+        cache.save()
+
+        assert [p.name for p in tmp_path.iterdir()] == ["pairs.npz"]
 
     def test_two_models_get_two_derived_paths(self, tmp_path):
         one = default_pair_cache_path("cross-encoder/x", RERANK_CHUNKING, tmp_path)
