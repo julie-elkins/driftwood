@@ -28,6 +28,61 @@ ones are: nothing fails when a status line decays, so nobody reads it again.
 
 ---
 
+## Score your own detector against this corpus
+
+If you have built something that flags stale documentation, this repository will tell you
+whether it cleared the bars that matter. You need no API key, no clones and none of the
+model machinery — just a file of predictions.
+
+```
+driftwood bench --predictions yours.jsonl --name my-detector
+```
+
+One JSON object per line: `{"example_id": "...", "answer": false}`, where `answer` is true
+when your detector says the documentation **was** false about the code at that commit,
+false when it says it was not, and null to abstain. Exit status is 0 for admissible, 1 for
+not, 2 for a refusal — so it works as a gate in your own pipeline.
+
+**There are three bars, and they are deliberately not a leaderboard.**
+
+| Bar | Why it is there |
+|---|---|
+| Beat the best **free floor** by more than the measured **run-to-run width** | A detector that edges out a keyword rule by less than this harness moves on its own has shown nothing — and a table sorted by F1 would still rank it first |
+| Beat the **constant** on accuracy | `always-not-false` — answer "not stale" every single time — scores **69.5%** here, because most changes invalidate nothing. That is the real competitor, and it is the one most published detectors are never shown against |
+| Clear the **chance range** on F1 | Scoring inside the band a random answerer occupies is not evidence of signal |
+
+Fail any of the three and the verdict is **NOT ADMISSIBLE**, which is a different claim from
+*worse*: it means the result does not survive this corpus's own error bars.
+
+**Two things the bench refuses to do, both learned here the expensive way.** It will not
+score you against floors measured on a different number of cases — the floors move every
+time a sheet is labelled, so `always-false` F1 has been 0.444, 0.415 and 0.458 at three
+corpus sizes, and the mismatch is checked rather than warned about. And it will not rank an
+**abstaining** detector against floors computed on every case, because a detector that
+abstains on the hard cases and is right about the easy ones reads as near-perfect on a
+denominator nobody agreed to. That is reported as NOT COMPARABLE.
+
+**What is actually scarce here is the labels.** 175 hand-written verdicts across 8 sheets,
+155 of them scoreable, on real documentation from five real repositories — plus a
+run-to-run width bought twice, which is the number that decides whether any gap is real.
+Benchmarks for this problem are otherwise synthetic, and a synthetic corpus cannot tell you
+what a real one will.
+
+**And what it does not show, stated before you quote anything from it.** 155 scoreable cases
+is small and its positive class is thin. Anchoring cannot be ruled out on one batch, which
+was labelled in a session whose stated motivation was needing more positives — the caveat is
+written up in full further down rather than parked in a footnote. A result here is a result
+on this corpus, not a claim about documentation in general.
+
+The report also prints a **`false_flag_rate`** — the share of no-fault cases flagged anyway.
+It is not a bar and does not decide admissibility, but it is the figure to quote next to one.
+Roughly seven in ten cases here invalidate nothing, so a detector's real cost is how often it
+interrupts somebody over a change that was fine, and F1 is silent about that: it is computed
+over the positives and never asks how much noise the negatives absorbed. A detector built and
+tuned only on changes known to contain a fault has never been shown this number at all.
+
+---
+
 ## The part worth reading: three rounds, wrong three different ways
 
 Drift labels are mined from git history. When a human commit corrects documentation, the
@@ -1957,6 +2012,7 @@ instrument is consistent.
 | 4 · Null-run harness — same input twice, to establish the noise floor | **built and measured both halves. Control: exactly 0.000 on five free judges, 130/130 stable. Paid: F1 width 0.160 over 3 trials of the seeded arm, which is wider than every margin in this file. 4 of 5 pre-registered predictions held; the one that named a mechanism failed** |
 | 4b · The label batch the width argued for — 25 shape-A cases | **labelled. 1 of 4 gradeable predictions held, and the three misses are about the corpus rather than the model. Every free floor rose: best free judge 0.42 → 0.490 on the seeded arm, so the bar moved away from the judge** |
 | 4c · Re-run the paid null run on the enlarged 95-case arm | **bought and graded. 75 new replies exactly as priced, 41% of the original in tokens against the 36% the call count suggested. Prediction 5 HELD: width 0.131 still exceeds the 0.080 gap to the best free floor, so *"the judge lost to grep"* is still not readable on F1. The accuracy loss is now same-corpus at 17.9 points, and one 70-case clause — every trial below the chance floor — is falsified** |
+| 4d · `driftwood bench` — the corpus as a bar somebody else can be measured against | **built. Reads the tracked floors and the tracked width rather than recomputing them, so it needs no key and no clones. Three bars: beat the best free floor by more than the run-to-run width, beat the constant on accuracy, clear the chance range. Refuses on a corpus-size mismatch and on an abstaining submission, because neither is a like-for-like comparison. 21 tests, nearly all of them failure directions, plus one that must never be deleted — a perfect detector IS admissible, because a gate that cannot be passed is as useless as one that cannot be failed** |
 | 5 · GitHub App + CI eval gate | **designed, and deliberately NOT built — a decision, not a gap.** A CI gate that blocks a merge needs a judge whose error rate is known and better than a constant. This one's is known and is not, so the gate would either block correct docs or pass silently, and deploying it would convert a measured loss into an unmeasured one |
 
 Stage 3 is not architecture on faith. Version-support claims turned out to be a class that
@@ -1975,8 +2031,14 @@ uv run driftwood stats --labels data/mine.jsonl
 uv run driftwood sample --labels data/mine.jsonl --shape A -n 25 --out review/shape-A-batch-99.md
 uv run driftwood score review/shape-A-batch-99.md --labels data/mine.jsonl
 uv run driftwood retrieve-eval data/mine.jsonl --out data/scores/retrieval.json
+uv run driftwood bench --predictions /tmp/my-detector.jsonl --name my-detector
 uv run pytest
 ```
+
+`bench` is the only command here aimed at somebody else's work, and the only one that needs
+neither a key nor the clones — it reads the tracked floors and the tracked width rather than
+recomputing them, which is also why it refuses when those files were measured on a different
+corpus size. See "Score your own detector against this corpus" at the top.
 
 Note the explicit `--out`, and the deliberately silly `-99` on the sheet name. `mine` refuses
 to overwrite an existing file without `--force`, because the flag's default points at

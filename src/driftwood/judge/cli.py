@@ -885,7 +885,119 @@ def _add_judge_flags(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _cmd_bench(args: argparse.Namespace) -> int:
+    """Score an outside detector against this corpus and gate the result."""
+    from driftwood.judge.bench import (
+        BenchRefused,
+        format_verdict,
+        judge_submission,
+        load_bars,
+        parse_predictions,
+    )
+
+    try:
+        cases, _tally = load_cases(args.review, args.data)
+        if not cases:
+            raise BenchRefused(
+                "NO_CORPUS",
+                "No labelled cases found.",
+                "The mined label set is derived data and is not in the repository. "
+                "Rebuild it from the manifest's replay field, then run "
+                "`driftwood judge-freeze` before scoring anything.",
+            )
+
+        # The live corpus, described the same way the recorded measurements describe
+        # theirs, so the mismatch check compares like with like.
+        scoreable = [c for c in cases if c.scoreable]
+        live_corpus = {
+            "verdicts": len(cases),
+            "scoreable": len(scoreable),
+            "with_code_path": len([c for c in scoreable if c.code_path]),
+        }
+
+        bars = load_bars(args.floors, args.width, live_corpus)
+        answers = parse_predictions(
+            args.predictions.read_text(encoding="utf-8"), source=str(args.predictions)
+        )
+        verdict = judge_submission(args.name, answers, cases, bars)
+    except BenchRefused as refused:
+        print(f"{refused.state}: {refused.message}\n\n{refused.guidance}", file=sys.stderr)
+        return 2
+
+    print(format_verdict(verdict))
+    if args.out:
+        dump_json(
+            args.out,
+            {
+                "submission": verdict.name,
+                "admissible": verdict.admissible,
+                "reasons": verdict.reasons,
+                "scores": {
+                    "n": verdict.scores.n,
+                    "answered": verdict.scores.answered,
+                    "abstained": verdict.scores.abstained,
+                    "f1": verdict.scores.f1,
+                    "accuracy_all": verdict.scores.accuracy_all,
+                    "confusion": {
+                        "tp": verdict.scores.tp, "fp": verdict.scores.fp,
+                        "fn": verdict.scores.fn, "tn": verdict.scores.tn,
+                    },
+                    "false_flag_rate": verdict.false_flag_rate,
+                },
+                "bars": {
+                    "best_free_floor": verdict.bars.best_free_name,
+                    "best_free_f1": verdict.bars.best_free_f1,
+                    "constant": verdict.bars.constant_name,
+                    "constant_accuracy": verdict.bars.constant_accuracy,
+                    "chance_f1_p95": verdict.bars.chance_f1_p95,
+                    "run_to_run_width_f1": verdict.bars.width_f1,
+                    "floors_from": verdict.bars.floors_path,
+                    "width_from": verdict.bars.width_path,
+                },
+                "corpus": verdict.bars.corpus,
+                "unknown_ids": verdict.unknown_ids,
+                "unscored_ids": verdict.missing_ids,
+            },
+        )
+    # Non-zero when the submission did not clear the bars, so this is usable as a gate in
+    # somebody else's pipeline without them having to parse the text.
+    return 0 if verdict.admissible else 1
+
+
 def add_parser(subparsers) -> None:
+    bench = subparsers.add_parser(
+        "bench",
+        help="score somebody else's detector against this corpus, and gate the result "
+             "against the free floor, the constant and the measured run-to-run width",
+    )
+    bench.add_argument("--review", type=Path, default=Path("review"))
+    bench.add_argument("--data", type=Path, default=Path("data"))
+    bench.add_argument(
+        "--predictions", type=Path, required=True,
+        help="JSONL, one object per line: {\"example_id\": \"...\", \"answer\": false}. "
+             "`answer` is true when the detector says the documentation WAS false about "
+             "the code, false when it says it was not, null to abstain",
+    )
+    bench.add_argument(
+        "--name", default="submission",
+        help="what to call this detector in the report",
+    )
+    bench.add_argument(
+        "--floors", type=Path,
+        default=Path("data/scores/judge-floors-175-seeded.json"),
+        help="recorded free floors for the seeded arm. Read rather than recomputed, "
+             "because the lexical floor needs the cloned corpus and this bench is meant "
+             "to run without it. Refuses if the file was measured on a different corpus",
+    )
+    bench.add_argument(
+        "--width", type=Path,
+        default=Path("data/scores/judge-null-run-paid-95.json"),
+        help="recorded run-to-run width. Nothing smaller than this is a result, so a "
+             "verdict is not issued without it",
+    )
+    bench.add_argument("--out", type=Path, default=None, help="also write JSON")
+    bench.set_defaults(func=_cmd_bench)
+
     cases = subparsers.add_parser(
         "judge-cases",
         help="report the hand-labelled cases, the class balance and the floors",
