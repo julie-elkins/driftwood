@@ -8,6 +8,19 @@ catches: a README that promises a flag the code renamed, a tutorial whose import
 compatibility claim that a `setup.py` change silently falsified two years ago. Docs do not
 fail loudly. They just become wrong.
 
+## Why this matters for agent-facing documentation
+
+An agent-facing document is a README, specification, prompt, or instruction file that an
+AI agent reads before taking action. The same semantic drift — a document becoming
+internally inconsistent after a change — can steer an agent toward the stale instruction
+before a person notices it. Driftwood's historical evidence and benchmark make that risk
+measurable against a real corpus.
+
+This is an offline detector and benchmark, not a real-time collaborative editor. It reports
+evidence that a document may no longer be true about the code; it does not approve a
+correction or publish one. A result is a reason to review the source, not permission for an
+agent to act on the proposed fix.
+
 **Status: stages 1 through 4 are built and measured. Stage 5 is deliberately not built.** The
 ground-truth miner, retrieval, the judge and the run-to-run null run all have numbers below.
 What none of them has is a win: every judge arm lost to a free floor, and that is reported here
